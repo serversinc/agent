@@ -1,4 +1,4 @@
-import { warn, error as logError, info } from "../utils/console";
+import { error as logError, info } from "../utils/console";
 import config from "../config";
 
 interface EventPayload {
@@ -52,7 +52,7 @@ class HttpService {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      return await response.json() as T;
+      return (await response.json()) as T;
     } catch (error) {
       this.handleError(error);
       throw error;
@@ -69,7 +69,6 @@ class HttpService {
       await this.post(data);
       return true;
     } catch (error) {
-      // Already logged, just return false
       return false;
     }
   }
@@ -89,10 +88,8 @@ class HttpService {
           message: error.message,
         });
       } else if (error.message.startsWith("HTTP ")) {
-        // Server responded with error status - already logged in post()
         return;
       } else {
-        // Network error or other failure
         logError(this.serviceName, "Request failed", {
           endpoint: this.endpoint,
           message: error.message,
@@ -102,8 +99,6 @@ class HttpService {
   }
 }
 
-// Export singleton instance
 export const httpService = new HttpService();
 
-// Also export class for testing or custom instances
 export { HttpService };
