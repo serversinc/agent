@@ -1,4 +1,3 @@
-import axios, { AxiosInstance, AxiosError } from "axios";
 import { warn, error as logError, info } from "../utils/console";
 import config from "../config";
 
@@ -8,45 +7,57 @@ interface EventPayload {
 }
 
 class HttpService {
-  private client: AxiosInstance | null = null;
+  private readonly baseURL: string;
+  private readonly timeout: number;
+  private readonly headers: Record<string, string>;
   private readonly endpoint = "/events";
   private readonly serviceName = "Http";
 
   constructor() {
-    const baseURL = config.CORE_URL;
-    const timeout = config.HTTP_TIMEOUT;
+    this.baseURL = config.CORE_URL;
+    this.timeout = config.HTTP_TIMEOUT;
     const secretKey = config.SECRET_KEY;
 
-    this.client = axios.create({
-      baseURL,
-      timeout,
-      headers: {
-        "Content-Type": "application/json",
-        ...(secretKey && { Authorization: `Bearer ${secretKey}` }),
-      },
-    });
+    this.headers = {
+      "Content-Type": "application/json",
+      ...(secretKey && { Authorization: `Bearer ${secretKey}` }),
+    };
 
-    // Add response interceptor for better error handling
-    this.client.interceptors.response.use(
-      response => response,
-      error => this.handleError(error),
-    );
-
-    info(this.serviceName, "HTTP client initialized", { baseURL, timeout });
+    info(this.serviceName, "HTTP client initialized", { baseURL: this.baseURL, timeout: this.timeout });
   }
 
   async post<T = any>(data: EventPayload): Promise<T | void> {
-    if (!this.client) {
-      warn(this.serviceName, "HTTP client not initialized, skipping POST request");
-      return;
-    }
+    const url = `${this.baseURL}${this.endpoint}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await this.client.post<T>(this.endpoint, data);
-      return response.data;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify(data),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        logError(this.serviceName, "Server error", {
+          endpoint: this.endpoint,
+          status: response.status,
+          statusText: response.statusText,
+          data: errorData,
+        });
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      return await response.json() as T;
     } catch (error) {
-      // Error already logged in interceptor
+      this.handleError(error);
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -67,34 +78,27 @@ class HttpService {
    * Check if the client is available
    */
   isAvailable(): boolean {
-    return this.client !== null;
+    return true;
   }
 
-  private handleError(error: AxiosError): Promise<never> {
-    const errorData = {
-      endpoint: this.endpoint,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      message: error.message,
-    };
-
-    if (error.code === "ECONNABORTED") {
-      logError(this.serviceName, "Request timeout", errorData);
-    } else if (error.response) {
-      // Server responded with error status
-      logError(this.serviceName, "Server error", {
-        ...errorData,
-        data: error.response.data,
-      });
-    } else if (error.request) {
-      // Request made but no response
-      logError(this.serviceName, "No response from server", errorData);
-    } else {
-      // Something else happened
-      logError(this.serviceName, "Request failed", errorData);
+  private handleError(error: unknown): void {
+    if (error instanceof Error) {
+      if (error.name === "AbortError") {
+        logError(this.serviceName, "Request timeout", {
+          endpoint: this.endpoint,
+          message: error.message,
+        });
+      } else if (error.message.startsWith("HTTP ")) {
+        // Server responded with error status - already logged in post()
+        return;
+      } else {
+        // Network error or other failure
+        logError(this.serviceName, "Request failed", {
+          endpoint: this.endpoint,
+          message: error.message,
+        });
+      }
     }
-
-    return Promise.reject(error);
   }
 }
 
