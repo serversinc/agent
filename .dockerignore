@@ -3,3 +3,5 @@
 .env.linux
 node_modules
 dist
+tests
+coverage

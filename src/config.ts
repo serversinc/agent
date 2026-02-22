@@ -15,6 +15,8 @@ const configSchema = z.object({
 
   PUBLIC_KEY: z.string().regex(/-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----/, "PUBLIC_KEY must be a valid PEM public key"),
 
+  SECRET_KEY: z.string().min(32),
+
   SERVER_ID: z.string().ulid(),
 
   DOCKER_SOCKET: z
@@ -47,6 +49,7 @@ function loadConfig(): AppConfig {
       PORT: process.env.PORT,
       CORE_URL: process.env.CORE_URL,
       PUBLIC_KEY: process.env.PUBLIC_KEY,
+      SECRET_KEY: process.env.SECRET_KEY,
       DOCKER_SOCKET: process.env.DOCKER_SOCKET,
       HTTP_TIMEOUT: process.env.HTTP_TIMEOUT,
       LOGGER_LEVEL: process.env.LOGGER_LEVEL,

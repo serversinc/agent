@@ -46,11 +46,7 @@ describe("jwtAuthMiddleware integration", () => {
       .setAudience(`agent:${process.env.SERVER_ID}`)
       .sign(privateKey as any);
 
-    const res = await request(s.server)
-      .post("/test")
-      .set("authorization", `Bearer ${jwt}`)
-      .set("x-request-timestamp", String(ts))
-      .send(body);
+    const res = await request(s.server).post("/test").set("authorization", `Bearer ${jwt}`).set("x-request-timestamp", String(ts)).send(body);
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -85,11 +81,7 @@ describe("jwtAuthMiddleware integration", () => {
       .setAudience(`agent:${process.env.SERVER_ID}`)
       .sign(otherPriv as any);
 
-    const res = await request(s.server)
-      .post("/test")
-      .set("authorization", `Bearer ${jwt}`)
-      .set("x-request-timestamp", String(ts))
-      .send(body);
+    const res = await request(s.server).post("/test").set("authorization", `Bearer ${jwt}`).set("x-request-timestamp", String(ts)).send(body);
 
     expect(res.status).toBe(401);
 

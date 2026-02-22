@@ -13,8 +13,8 @@ class HttpService {
   private readonly serviceName = "Http";
 
   constructor() {
-    const baseURL   = config.CORE_URL;
-    const timeout   = config.HTTP_TIMEOUT;
+    const baseURL = config.CORE_URL;
+    const timeout = config.HTTP_TIMEOUT;
     const secretKey = config.SECRET_KEY;
 
     this.client = axios.create({
