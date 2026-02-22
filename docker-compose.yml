@@ -1,0 +1,17 @@
+services:
+  agent:
+    container_name: agent
+    build: .
+    env_file:
+     - .env
+    ports:
+      - "7567:7567"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/agent:/agent
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  default:
+    driver: bridge

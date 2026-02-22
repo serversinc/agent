@@ -1,0 +1,26 @@
+import { defineConfig } from "vitest/config";
+import path from "path";
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: "node",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      exclude: [
+        "node_modules/",
+        "dist/",
+        "**/*.config.ts",
+        "**/*.d.ts",
+        "**/types/**",
+      ],
+    },
+    setupFiles: ["./tests/setup.ts"], // Optional - for test setup
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+});
