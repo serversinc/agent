@@ -1,5 +1,6 @@
 import { z } from "zod";
 import dotenv from "dotenv";
+import { readFileSync } from "fs";
 
 dotenv.config();
 
@@ -13,7 +14,7 @@ const configSchema = z.object({
 
   CORE_URL: z.string().url("CORE_URL must be a valid URL").min(1, "CORE_URL is required"),
 
-  PUBLIC_KEY: z.string().regex(/-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----/, "PUBLIC_KEY must be a valid PEM public key"),
+  PUBLIC_KEY_PATH: z.string().min(1, "PUBLIC_KEY_PATH is required"),
 
   SECRET_KEY: z.string().min(32),
 
@@ -40,24 +41,35 @@ const configSchema = z.object({
 });
 
 // Infer the TypeScript type from the schema
-export type AppConfig = z.infer<typeof configSchema>;
+export type AppConfig = Omit<z.infer<typeof configSchema>, 'PUBLIC_KEY_PATH'> & { PUBLIC_KEY: string };
 
 // Parse and validate environment variables
 function loadConfig(): AppConfig {
   try {
-    const config = configSchema.parse({
+    const rawConfig = configSchema.parse({
       PORT: process.env.PORT,
       CORE_URL: process.env.CORE_URL,
-      PUBLIC_KEY: process.env.PUBLIC_KEY,
+      PUBLIC_KEY_PATH: process.env.PUBLIC_KEY_PATH,
       SECRET_KEY: process.env.SECRET_KEY,
-      DOCKER_SOCKET: process.env.DOCKER_SOCKET,
+      SERVER_ID: process.env.SERVER_ID,
+      DOCKER_SOCKET: process.env.DOCKER_SECRET,
       HTTP_TIMEOUT: process.env.HTTP_TIMEOUT,
       LOGGER_LEVEL: process.env.LOGGER_LEVEL,
-      LOGGER_PRETTY: process.env.LOGGER_PRETTY,
-      SERVER_ID: process.env.SERVER_ID,
+      LOGGER_PRETTY: process.env.LOGGER_PRETTY
     });
 
-    return config;
+    // Load the public key file
+    const publicKey = readFileSync(rawConfig.PUBLIC_KEY_PATH, "utf8");
+
+    // Validate it's a valid PEM key
+    if (!/-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----/.test(publicKey)) {
+      throw new Error("PUBLIC_KEY file must contain a valid PEM public key");
+    }
+
+    return {
+      ...rawConfig,
+      PUBLIC_KEY: publicKey,
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       const errorMessages = error.errors.map(err => `  - ${err.path.join(".")}: ${err.message}`).join("\n");
