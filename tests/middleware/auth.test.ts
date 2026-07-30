@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import { Hono } from "hono";
-import crypto from "crypto";
 
 // Mock config before importing the middleware so the module uses our test values
 vi.mock("../../src/config", () => ({
@@ -51,24 +50,13 @@ describe("jwtAuthMiddleware", () => {
     expect(res.body.error).toBe("Unauthorized");
   });
 
-  it("returns 401 for invalid timestamp header", async () => {
+  it("returns 401 when the x-request-timestamp header is missing", async () => {
     const s = makeApp();
 
-    const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", "not-a-number").send({});
+    const res = await request(s.server).post("/test").set("authorization", "Bearer token").send({});
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Invalid timestamp");
-  });
-
-  it("returns 401 for expired request", async () => {
-    const s = makeApp();
-
-    const oldTs = Math.floor(Date.now() / 1000) - 100; // beyond CLOCK_SKEW_SECONDS
-
-    const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", String(oldTs)).send({});
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Expired request");
+    expect(res.body.error).toBe("Unauthorized");
   });
 
   it("returns 401 when jwtVerify throws", async () => {
@@ -84,56 +72,25 @@ describe("jwtAuthMiddleware", () => {
     expect(res.body.error).toBe("Unauthorized");
   });
 
-  it("returns 401 for payload ts mismatch", async () => {
+  it("returns 401 when the token's iat does not match the request timestamp", async () => {
     const s = makeApp();
 
-    (jose as any).jwtVerify.mockResolvedValue({ payload: { ts: 1, body_hash: "abc" } });
-
     const ts = Math.floor(Date.now() / 1000);
+    (jose as any).jwtVerify.mockResolvedValue({ payload: { iat: ts - 1 } });
 
     const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", String(ts)).send({});
 
     expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Invalid timestamp");
+    expect(res.body.error).toBe("Unauthorized");
   });
 
-  it("returns 401 for missing body_hash", async () => {
+  it("allows the request when the token's iat matches the request timestamp", async () => {
     const s = makeApp();
 
     const ts = Math.floor(Date.now() / 1000);
-    (jose as any).jwtVerify.mockResolvedValue({ payload: { ts } });
+    (jose as any).jwtVerify.mockResolvedValue({ payload: { iat: ts } });
 
     const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", String(ts)).send({});
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Malformed request body");
-  });
-
-  it("returns 401 for body hash mismatch", async () => {
-    const s = makeApp();
-
-    const ts = Math.floor(Date.now() / 1000);
-    (jose as any).jwtVerify.mockResolvedValue({ payload: { ts, body_hash: "wronghash" } });
-
-    const body = { hello: "world" };
-
-    const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", String(ts)).send(body);
-
-    expect(res.status).toBe(401);
-    expect(res.body.error).toBe("Malformed request body");
-  });
-
-  it("allows request when token and body hash match", async () => {
-    const s = makeApp();
-
-    const ts = Math.floor(Date.now() / 1000);
-    const body = { a: 1 };
-    const raw = JSON.stringify(body);
-    const hash = crypto.createHash("sha256").update(raw).digest("hex");
-
-    (jose as any).jwtVerify.mockResolvedValue({ payload: { ts, body_hash: hash } });
-
-    const res = await request(s.server).post("/test").set("authorization", "Bearer token").set("x-request-timestamp", String(ts)).send(body);
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

@@ -10,7 +10,7 @@ class HttpService {
   private readonly baseURL: string;
   private readonly timeout: number;
   private readonly headers: Record<string, string>;
-  private readonly endpoint = "/events";
+  private readonly endpoint = "/v1/agent/event";
   private readonly serviceName = "Http";
 
   constructor() {
@@ -20,7 +20,7 @@ class HttpService {
 
     this.headers = {
       "Content-Type": "application/json",
-      ...(secretKey && { Authorization: `Bearer ${secretKey}` }),
+      ...(secretKey && { "x-secret-key": secretKey }),
     };
 
     info(this.serviceName, "HTTP client initialized", { baseURL: this.baseURL, timeout: this.timeout });
