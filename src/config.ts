@@ -38,6 +38,24 @@ const configSchema = z.object({
     .default("false")
     .transform(val => val === "true")
     .pipe(z.boolean()),
+
+  HEARTBEAT_INTERVAL_MS: z
+    .string()
+    .default("30000")
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive().max(300000)),
+
+  METRICS_INTERVAL_MS: z
+    .string()
+    .default("60000")
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive().max(600000)),
+
+  STATE_CHECK_INTERVAL_MS: z
+    .string()
+    .default("86400000")
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive().max(604800000)),
 });
 
 // Infer the TypeScript type from the schema
@@ -55,7 +73,10 @@ function loadConfig(): AppConfig {
       DOCKER_SOCKET: process.env.DOCKER_SECRET,
       HTTP_TIMEOUT: process.env.HTTP_TIMEOUT,
       LOGGER_LEVEL: process.env.LOGGER_LEVEL,
-      LOGGER_PRETTY: process.env.LOGGER_PRETTY
+      LOGGER_PRETTY: process.env.LOGGER_PRETTY,
+      HEARTBEAT_INTERVAL_MS: process.env.HEARTBEAT_INTERVAL_MS,
+      METRICS_INTERVAL_MS: process.env.METRICS_INTERVAL_MS,
+      STATE_CHECK_INTERVAL_MS: process.env.STATE_CHECK_INTERVAL_MS,
     });
 
     // Load the public key file

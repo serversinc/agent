@@ -6,13 +6,14 @@ import { zValidator } from "@hono/zod-validator";
 import { createContainerSchema } from "../validators/Containers";
 import { pullImageSchema } from "../validators/Images";
 import { createNetworkSchema } from "../validators/Networks";
+import { runShellSchema, runComposeSchema, execContainerSchema } from "../validators/Shell";
 
 import { info } from "../utils/console";
 import { runWithRequestContext } from "../utils/context";
 import config from "../config";
 import { jwtAuthMiddleware } from "../middleware/auth";
 
-export function startServer(containerHandlers: any, imageHandlers: any, networkHandlers: any, port?: number) {
+export function startServer(containerHandlers: any, imageHandlers: any, networkHandlers: any, shellHandlers: any, port?: number) {
   const app = new Hono();
 
   app.use(cors());
@@ -53,6 +54,11 @@ export function startServer(containerHandlers: any, imageHandlers: any, networkH
   app.get("/networks/:id", networkHandlers.get);
   app.post("/networks", zValidator("json", createNetworkSchema), networkHandlers.create);
   app.delete("/networks/:id", networkHandlers.remove);
+
+  // Shell
+  app.post("/run-shell",      zValidator("json", runShellSchema),      shellHandlers.runShell);
+  app.post("/run-compose",    zValidator("json", runComposeSchema),    shellHandlers.runCompose);
+  app.post("/exec-container", zValidator("json", execContainerSchema), shellHandlers.execContainer);
 
   serve(
     {
