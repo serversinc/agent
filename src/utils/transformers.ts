@@ -1,18 +1,32 @@
 import { ContainerInfo } from "dockerode";
 
 /**
+ * Splits a "repo:tag" or "repo@sha256:digest" reference into its name and tag,
+ * treating a colon that's part of a registry host:port (e.g. localhost:5000/image) as not a tag separator.
+ */
+function parseImageTag(image: string): { name: string; tag: string } {
+  const lastColon = image.lastIndexOf(":");
+  if (lastColon === -1 || image.indexOf("/") > lastColon) {
+    return { name: image, tag: "latest" };
+  }
+  return { name: image.substring(0, lastColon), tag: image.substring(lastColon + 1) || "latest" };
+}
+
+/**
  * Normalizes container data from Dockerode
  * @param container Container data from Dockerode
  * @returns Normalized container data
  */
 export function normalizeContainer(container: ContainerInfo) {
+  const { name: imageName, tag } = parseImageTag(container.Image);
+
   return {
     id: container.Id,
     name: container.Names[0],
     image: {
-      name: container.Image,
+      name: imageName,
       id: container.ImageID,
-      tag: container.ImageID.split(":")[1],
+      tag,
     },
     state: container.State,
     ports: container.Ports.map(port => ({

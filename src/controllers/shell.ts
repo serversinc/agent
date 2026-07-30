@@ -5,6 +5,9 @@ import { ShellService } from "../services/Shell";
 
 const COMPOSE_BASE = "/srv/compose";
 
+// Matches Docker's own container/project naming rules — no shell metacharacters, no path separators.
+const SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
 export function createShellHandlers(shellService: ShellService) {
   if (!shellService) throw new Error("Shell service is required");
 
@@ -25,6 +28,10 @@ export function createShellHandlers(shellService: ShellService) {
       env?: Record<string, string>;
     }>();
 
+    if (!SAFE_NAME.test(project)) {
+      return ctx.json({ error: "Invalid project name" }, 400);
+    }
+
     const dir = join(COMPOSE_BASE, project);
     mkdirSync(dir, { recursive: true });
 
@@ -37,7 +44,7 @@ export function createShellHandlers(shellService: ShellService) {
       writeFileSync(join(dir, ".env"), envContent, "utf-8");
     }
 
-    const result = await shellService.exec(`docker compose -p ${project} up -d`, {
+    const result = await shellService.exec(`docker compose -p '${project}' up -d`, {
       cwd: dir,
       timeout: 300_000,
     });
@@ -55,9 +62,13 @@ export function createShellHandlers(shellService: ShellService) {
       command: string;
     }>();
 
+    if (!SAFE_NAME.test(container)) {
+      return ctx.json({ error: "Invalid container name" }, 400);
+    }
+
     const escaped = command.replace(/'/g, "'\\''");
     const result = await shellService.exec(
-      `docker exec ${container} sh -c '${escaped}'`,
+      `docker exec '${container}' sh -c '${escaped}'`,
       { timeout: 120_000 },
     );
 
