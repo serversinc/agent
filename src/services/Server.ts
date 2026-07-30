@@ -13,7 +13,23 @@ import { runWithRequestContext } from "../utils/context";
 import config from "../config";
 import { jwtAuthMiddleware } from "../middleware/auth";
 
-export function startServer(containerHandlers: any, imageHandlers: any, networkHandlers: any, shellHandlers: any, port?: number) {
+import type { createContainerHandlers } from "../controllers/containers";
+import type { createImageHandlers } from "../controllers/images";
+import type { createNetworkHandlers } from "../controllers/networks";
+import type { createShellHandlers } from "../controllers/shell";
+
+type ContainerHandlers = ReturnType<typeof createContainerHandlers>;
+type ImageHandlers = ReturnType<typeof createImageHandlers>;
+type NetworkHandlers = ReturnType<typeof createNetworkHandlers>;
+type ShellHandlers = ReturnType<typeof createShellHandlers>;
+
+export function startServer(
+  containerHandlers: ContainerHandlers,
+  imageHandlers: ImageHandlers,
+  networkHandlers: NetworkHandlers,
+  shellHandlers: ShellHandlers,
+  port?: number,
+) {
   const app = new Hono();
 
   app.use(cors());

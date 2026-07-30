@@ -70,7 +70,7 @@ function loadConfig(): AppConfig {
       PUBLIC_KEY_PATH: process.env.PUBLIC_KEY_PATH,
       SECRET_KEY: process.env.SECRET_KEY,
       SERVER_ID: process.env.SERVER_ID,
-      DOCKER_SOCKET: process.env.DOCKER_SECRET,
+      DOCKER_SOCKET: process.env.DOCKER_SOCKET,
       HTTP_TIMEOUT: process.env.HTTP_TIMEOUT,
       LOGGER_LEVEL: process.env.LOGGER_LEVEL,
       LOGGER_PRETTY: process.env.LOGGER_PRETTY,

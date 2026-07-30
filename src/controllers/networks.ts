@@ -33,7 +33,7 @@ export function createNetworkHandlers(dockerService: DockerService) {
 
       const network = await dockerService.docker.createNetwork({
         Name: options.name,
-        Driver: options.drive || "bridge",
+        Driver: options.driver || "bridge",
         CheckDuplicate: true,
         Internal: options.internal || false,
         Attachable: options.attachable || false,
