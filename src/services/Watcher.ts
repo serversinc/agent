@@ -1,7 +1,5 @@
-import { ChildProcessByStdio, spawn } from "child_process";
 import { error, info, warn } from "../utils/console";
 import { httpService } from "./Http";
-import { Readable } from "stream";
 import { DockerService } from "./Docker";
 import { ContainerInspectInfo } from "dockerode";
 
@@ -37,7 +35,7 @@ export class WatcherService {
   public readonly name = "Watcher";
 
   private readonly docker: DockerService;
-  private spawnedProcess: ChildProcessByStdio<null, Readable, Readable> | null = null;
+  private eventStream: NodeJS.ReadableStream | null = null;
   private buffer = "";
   private state: WatcherState = "stopped";
 
@@ -50,7 +48,10 @@ export class WatcherService {
     this.docker = dockerService;
   }
 
-  // Start watching the Docker events
+  // Start watching the Docker events. Uses dockerode's own `/events` stream
+  // (the same client already used for every other Docker call) rather than
+  // shelling out to a `docker` CLI binary — the agent image doesn't ship one,
+  // so the previous spawn-based approach never actually ran.
   start(): void {
     if (this.state === "running" || this.state === "starting") {
       info(this.name, "Docker event watcher already running or starting");
@@ -59,38 +60,36 @@ export class WatcherService {
 
     this.state = "starting";
 
-    try {
-      this.spawnedProcess = spawn("docker", ["events", "--format", "{{json .}}"], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+    this.docker.docker
+      .getEvents({})
+      .then(stream => {
+        this.eventStream = stream;
 
-      this.spawnedProcess.stdout.on("data", chunk => this.handleChunk(chunk));
+        stream.on("data", chunk => this.handleChunk(chunk as Buffer));
 
-      this.spawnedProcess.stderr.on("data", data => {
-        error(this.name, "Docker events stderr", { message: data.toString().trim() });
-      });
+        stream.on("error", err => {
+          error(this.name, "Docker events stream error", { error: (err as Error).message });
+          this.eventStream = null;
+          this.state = "stopped";
+          this.scheduleRestart();
+        });
 
-      this.spawnedProcess.on("error", err => {
-        error(this.name, "Failed to spawn docker events", { error: err.message });
+        stream.on("end", () => {
+          warn(this.name, "Docker events stream ended");
+          this.eventStream = null;
+          this.state = "stopped";
+          this.scheduleRestart();
+        });
+
+        this.state = "running";
+        this.retryCount = 0; // Reset retry count on successful start
+        info(this.name, "Docker event watcher started successfully");
+      })
+      .catch(err => {
+        error(this.name, "Failed to start watcher", { error: (err as Error).message });
         this.state = "stopped";
         this.scheduleRestart();
       });
-
-      this.spawnedProcess.on("exit", (code, signal) => {
-        error(this.name, "Docker events process exited", { code, signal });
-        this.spawnedProcess = null;
-        this.state = "stopped";
-        this.scheduleRestart();
-      });
-
-      this.state = "running";
-      this.retryCount = 0; // Reset retry count on successful start
-      info(this.name, "Docker event watcher started successfully");
-    } catch (err) {
-      error(this.name, "Failed to start watcher", { error: (err as Error).message });
-      this.state = "stopped";
-      this.scheduleRestart();
-    }
   }
 
   // Stop watching the Docker events
@@ -102,18 +101,10 @@ export class WatcherService {
     this.state = "stopping";
     info(this.name, "Stopping Docker event watcher");
 
-    if (this.spawnedProcess) {
-      this.spawnedProcess.kill("SIGTERM");
-
-      // Force kill after timeout
-      setTimeout(() => {
-        if (this.spawnedProcess) {
-          warn(this.name, "Force killing docker events process");
-          this.spawnedProcess.kill("SIGKILL");
-        }
-      }, 5000);
-
-      this.spawnedProcess = null;
+    if (this.eventStream) {
+      const stream = this.eventStream as NodeJS.ReadableStream & { destroy?: () => void };
+      stream.destroy?.();
+      this.eventStream = null;
     }
 
     this.buffer = "";
