@@ -245,6 +245,15 @@ describe("Container Handlers", () => {
       expect(response.status).toBe(500);
       expect(response.body.error).toBe("Container not running");
     });
+
+    it("should pass through a timeout from the request body", async () => {
+      mockDockerService.stopContainer.mockResolvedValue(undefined);
+
+      const response = await request(server).post("/containers/abc123/stop").send({ timeout: 140 });
+
+      expect(response.status).toBe(200);
+      expect(mockDockerService.stopContainer).toHaveBeenCalledWith("abc123", 140);
+    });
   });
 
   describe("POST /containers/:id/exec", () => {

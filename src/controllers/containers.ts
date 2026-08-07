@@ -146,8 +146,27 @@ export function createContainerHandlers(dockerService: DockerService) {
   async function stop(ctx: Context) {
     try {
       const id = ctx.req.param("id");
-      await dockerService.stopContainer(id);
-      info("Container", "Stopped container", { id });
+
+      // Optional grace period (seconds) before Docker SIGKILLs the
+      // container, e.g. for a queue worker that needs time to finish an
+      // in-flight job. Falls back to dockerService's own default when
+      // omitted or when the body isn't valid JSON.
+      let timeout: number | undefined;
+      try {
+        const body = await ctx.req.json<{ timeout?: number }>();
+        if (typeof body?.timeout === "number") {
+          timeout = body.timeout;
+        }
+      } catch {
+        // no body sent — use the default
+      }
+
+      if (timeout !== undefined) {
+        await dockerService.stopContainer(id, timeout);
+      } else {
+        await dockerService.stopContainer(id);
+      }
+      info("Container", "Stopped container", { id, timeout });
       return ctx.json({ success: true, message: "container stopped", id });
     } catch (err) {
       return handleError(ctx, err, "Container", "stop container", { id: ctx.req.param("id") });
