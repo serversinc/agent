@@ -27,6 +27,9 @@ export function createDockerMock(overrides: Partial<DockerService & { docker?: P
       listNetworks: vi.fn() as unknown as () => Promise<Dockerode.NetworkInspectInfo[]>,
       getNetwork: vi.fn() as unknown as (id: string) => Dockerode.Network,
       createNetwork: vi.fn() as unknown as (opts: any) => Promise<Dockerode.Network>,
+      listVolumes: vi.fn() as unknown as () => Promise<Dockerode.VolumeInspectInfo[]>,
+      getVolume: vi.fn() as unknown as (name: string) => Dockerode.Volume,
+      createVolume: vi.fn() as unknown as (opts: any) => Promise<Dockerode.VolumeCreateResponse>,
     } as Partial<Dockerode>,
   };
 
