@@ -31,7 +31,7 @@ const containerHandlers = createContainerHandlers(dockerService);
 const imageHandlers     = createImageHandlers(dockerService);
 const networkHandlers   = createNetworkHandlers(dockerService);
 const volumeHandlers    = createVolumeHandlers(dockerService);
-const shellHandlers     = createShellHandlers(shellService);
+const shellHandlers     = createShellHandlers(shellService, dockerService);
 const securityHandlers  = createSecurityHandlers(securityService);
 const packageHandlers   = createPackageHandlers(packageService);
 
