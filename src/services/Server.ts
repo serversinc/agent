@@ -6,7 +6,10 @@ import { zValidator } from "@hono/zod-validator";
 import { createContainerSchema } from "../validators/Containers";
 import { pullImageSchema } from "../validators/Images";
 import { createNetworkSchema } from "../validators/Networks";
+import { createVolumeSchema } from "../validators/Volumes";
 import { runShellSchema, runComposeSchema, execContainerSchema } from "../validators/Shell";
+import { toggleSchema, firewallPortSchema } from "../validators/Security";
+import { installPackageSchema } from "../validators/Packages";
 
 import { info } from "../utils/console";
 import { runWithRequestContext } from "../utils/context";
@@ -16,18 +19,27 @@ import { jwtAuthMiddleware } from "../middleware/auth";
 import type { createContainerHandlers } from "../controllers/containers";
 import type { createImageHandlers } from "../controllers/images";
 import type { createNetworkHandlers } from "../controllers/networks";
+import type { createVolumeHandlers } from "../controllers/volumes";
 import type { createShellHandlers } from "../controllers/shell";
+import type { createSecurityHandlers } from "../controllers/security";
+import type { createPackageHandlers } from "../controllers/packages";
 
 type ContainerHandlers = ReturnType<typeof createContainerHandlers>;
 type ImageHandlers = ReturnType<typeof createImageHandlers>;
 type NetworkHandlers = ReturnType<typeof createNetworkHandlers>;
+type VolumeHandlers = ReturnType<typeof createVolumeHandlers>;
 type ShellHandlers = ReturnType<typeof createShellHandlers>;
+type SecurityHandlers = ReturnType<typeof createSecurityHandlers>;
+type PackageHandlers = ReturnType<typeof createPackageHandlers>;
 
 export function startServer(
   containerHandlers: ContainerHandlers,
   imageHandlers: ImageHandlers,
   networkHandlers: NetworkHandlers,
+  volumeHandlers: VolumeHandlers,
   shellHandlers: ShellHandlers,
+  securityHandlers: SecurityHandlers,
+  packageHandlers: PackageHandlers,
   port?: number,
 ) {
   const app = new Hono();
@@ -71,10 +83,29 @@ export function startServer(
   app.post("/networks", zValidator("json", createNetworkSchema), networkHandlers.create);
   app.delete("/networks/:id", networkHandlers.remove);
 
+  // Volumes
+  app.get("/volumes", volumeHandlers.list);
+  app.get("/volumes/:name", volumeHandlers.get);
+  app.post("/volumes", zValidator("json", createVolumeSchema), volumeHandlers.create);
+  app.delete("/volumes/:name", volumeHandlers.remove);
+
   // Shell
   app.post("/run-shell",      zValidator("json", runShellSchema),      shellHandlers.runShell);
   app.post("/run-compose",    zValidator("json", runComposeSchema),    shellHandlers.runCompose);
   app.post("/exec-container", zValidator("json", execContainerSchema), shellHandlers.execContainer);
+
+  // Security
+  app.get("/security",                    securityHandlers.getStatus);
+  app.put("/security/root-login",         zValidator("json", toggleSchema),      securityHandlers.updateRootSshLogin);
+  app.put("/security/firewall",           zValidator("json", toggleSchema),      securityHandlers.updateFirewall);
+  app.get("/security/firewall/ports",     securityHandlers.listFirewallPorts);
+  app.post("/security/firewall/ports",    zValidator("json", firewallPortSchema), securityHandlers.addFirewallPort);
+  app.delete("/security/firewall/ports/:port", securityHandlers.removeFirewallPort);
+  app.put("/security/fail2ban",           zValidator("json", toggleSchema),      securityHandlers.updateFail2ban);
+  app.put("/security/auto-updates",       zValidator("json", toggleSchema),      securityHandlers.updateAutoUpdates);
+
+  // Packages
+  app.post("/packages/install", zValidator("json", installPackageSchema), packageHandlers.install);
 
   serve(
     {
