@@ -16,12 +16,17 @@ RUN npm run build
 FROM node:24-alpine
 WORKDIR /app
 
-# Install runtime dependencies (Alpine uses apk)
+# Install runtime dependencies (Alpine uses apk). docker-cli/docker-cli-compose
+# are needed because shell.ts shells out to `docker`/`docker compose` for
+# exec-container, run-compose, etc — dockerode alone only covers the REST-y
+# Docker API surface used by the other controllers, not compose or exec.
 RUN apk add --no-cache \
     ca-certificates \
     curl \
     iproute2 \
-    tini
+    tini \
+    docker-cli \
+    docker-cli-compose
 
 # Copy package files and install ONLY production dependencies
 COPY package*.json ./
