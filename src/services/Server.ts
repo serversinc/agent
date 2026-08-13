@@ -70,6 +70,7 @@ export function startServer(
   app.post("/containers/:id/stop", containerHandlers.stop);
   app.post("/containers/:id/restart", containerHandlers.restart);
   app.post("/containers/:id/command", containerHandlers.runCommand);
+  app.get("/containers/:id/logs", containerHandlers.logs);
 
   // Images
   app.get("/images", imageHandlers.list);

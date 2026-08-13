@@ -1,8 +1,9 @@
 import { Context } from "hono";
+import { streamSSE } from "hono/streaming";
 
-import { demultiplexDockerStream, stripAnsiCodes } from "../utils/transformers";
+import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser, DockerLogFrame } from "../utils/transformers";
 import { DockerService } from "../services/Docker";
-import { info } from "../utils/console";
+import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
 
 interface CreateContainerOptions {
@@ -173,6 +174,60 @@ export function createContainerHandlers(dockerService: DockerService) {
     }
   }
 
+  async function logs(ctx: Context) {
+    const id = ctx.req.param("id");
+    const follow = ctx.req.query("follow") === "true";
+    const tail = ctx.req.query("tail") ? Number(ctx.req.query("tail")) : undefined;
+    const since = ctx.req.query("since") ? Number(ctx.req.query("since")) : undefined;
+    const timestamps = ctx.req.query("timestamps") === "true";
+    const stdout = ctx.req.query("stdout") !== "false";
+    const stderr = ctx.req.query("stderr") !== "false";
+
+    try {
+      const inspectInfo = await dockerService.getContainer(id);
+      const tty = inspectInfo.Config?.Tty ?? false;
+
+      if (!follow) {
+        const buffer = await dockerService.getContainerLogs(id, { tail, since, timestamps, stdout, stderr });
+        const logLines: DockerLogFrame[] = tty
+          ? [{ stream: "stdout", message: stripAnsiCodes(buffer.toString("utf8")) }]
+          : new DockerLogFrameParser().push(buffer);
+
+        info("Container", "Fetched container logs", { id, tail, lines: logLines.length });
+        return ctx.json({ success: true, id, logs: logLines });
+      }
+
+      return streamSSE(ctx, async sseStream => {
+        const dockerStream = await dockerService.streamContainerLogs(id, { tail, since, timestamps, stdout, stderr });
+        const parser = new DockerLogFrameParser();
+
+        const stopStreaming = () => {
+          if ("destroy" in dockerStream && typeof dockerStream.destroy === "function") {
+            dockerStream.destroy();
+          }
+        };
+        ctx.req.raw.signal.addEventListener("abort", stopStreaming);
+
+        try {
+          for await (const chunk of dockerStream) {
+            const buffer = Buffer.from(chunk);
+            const frames = tty ? [{ stream: "stdout" as const, message: stripAnsiCodes(buffer.toString("utf8")) }] : parser.push(buffer);
+
+            for (const frame of frames) {
+              await sseStream.writeSSE({ event: "log", data: JSON.stringify(frame) });
+            }
+          }
+        } finally {
+          ctx.req.raw.signal.removeEventListener("abort", stopStreaming);
+        }
+      }, async streamErr => {
+        logError("Container", "Container log stream failed", { id, error: streamErr.message });
+      });
+    } catch (err) {
+      return handleError(ctx, err, "Container", "get container logs", { id });
+    }
+  }
+
   async function runCommand(ctx: Context) {
     try {
       const id = ctx.req.param("id");
@@ -222,6 +277,7 @@ export function createContainerHandlers(dockerService: DockerService) {
     remove,
     restart,
     start,
+    logs,
     stop,
     runCommand,
   };

@@ -99,6 +99,49 @@ export class DockerService {
     }
   }
 
+  async getContainerLogs(
+    id: string,
+    options: { tail?: number; since?: number; timestamps?: boolean; stdout?: boolean; stderr?: boolean } = {},
+  ): Promise<Buffer> {
+    try {
+      const container = this.docker.getContainer(id);
+      const result = await container.logs({
+        follow: false,
+        stdout: options.stdout ?? true,
+        stderr: options.stderr ?? true,
+        tail: options.tail ?? 200,
+        since: options.since ?? 0,
+        timestamps: options.timestamps ?? false,
+      });
+      // With follow: false, dockerode resolves the promise with the full log buffer.
+      return result as unknown as Buffer;
+    } catch (err) {
+      error(this.name, "Failed to get container logs", { id, error: (err as Error).message });
+      throw err;
+    }
+  }
+
+  async streamContainerLogs(
+    id: string,
+    options: { tail?: number; since?: number; timestamps?: boolean; stdout?: boolean; stderr?: boolean } = {},
+  ): Promise<NodeJS.ReadableStream> {
+    try {
+      const container = this.docker.getContainer(id);
+      const stream = await container.logs({
+        follow: true,
+        stdout: options.stdout ?? true,
+        stderr: options.stderr ?? true,
+        tail: options.tail ?? 100,
+        since: options.since ?? 0,
+        timestamps: options.timestamps ?? false,
+      });
+      return stream as unknown as NodeJS.ReadableStream;
+    } catch (err) {
+      error(this.name, "Failed to stream container logs", { id, error: (err as Error).message });
+      throw err;
+    }
+  }
+
   // IMAGES
 
   async listImages(): Promise<Docker.ImageInfo[]> {
