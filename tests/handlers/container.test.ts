@@ -360,8 +360,8 @@ describe("Container Handlers", () => {
         success: true,
         id: "abc123",
         logs: [
-          { stream: "stdout", message: "out\n" },
-          { stream: "stderr", message: "err\n" },
+          { container_id: "abc123", ts: expect.any(Number), seq: 0, stream: "stdout", message: "out\n" },
+          { container_id: "abc123", ts: expect.any(Number), seq: 1, stream: "stderr", message: "err\n" },
         ],
       });
     });
@@ -373,7 +373,9 @@ describe("Container Handlers", () => {
       const response = await request(server).get("/containers/abc123/logs");
 
       expect(response.status).toBe(200);
-      expect(response.body.logs).toEqual([{ stream: "stdout", message: "raw tty output\n" }]);
+      expect(response.body.logs).toEqual([
+        { container_id: "abc123", ts: expect.any(Number), seq: 0, stream: "stdout", message: "raw tty output\n" },
+      ]);
     });
 
     it("defaults tail/stdout/stderr and passes query params through to the service", async () => {
@@ -440,12 +442,26 @@ describe("Container Handlers", () => {
       expect(response.headers["content-type"]).toContain("text/event-stream");
 
       const events = response.text.trim().split("\n\n").filter(Boolean);
-      const dataLines = events.filter(e => e.startsWith("event: log")).map(e => JSON.parse(e.split("data: ")[1]));
+      const dataLines = events
+        .filter(e => e.startsWith("event: log"))
+        .map(e => JSON.parse(e.split("\n").find(line => line.startsWith("data: "))!.slice("data: ".length)));
 
       expect(dataLines).toEqual([
-        { stream: "stdout", message: "first\n" },
-        { stream: "stderr", message: "second\n" },
+        { container_id: "abc123", ts: expect.any(Number), seq: 0, stream: "stdout", message: "first\n" },
+        { container_id: "abc123", ts: expect.any(Number), seq: 1, stream: "stderr", message: "second\n" },
       ]);
+    });
+
+    it("sets the SSE event id to the frame's seq, for Last-Event-ID reconnects", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.streamContainerLogs.mockResolvedValue(fakeLogStream([makeDockerMuxedBuffer("one\n", ""), makeDockerMuxedBuffer("two\n", "")]));
+
+      const response = await request(server).get("/containers/abc123/logs").query({ follow: "true" });
+
+      const events = response.text.trim().split("\n\n").filter(Boolean).filter(e => e.startsWith("event: log"));
+      const ids = events.map(e => e.split("\n").find(line => line.startsWith("id: "))!.slice("id: ".length));
+
+      expect(ids).toEqual(["0", "1"]);
     });
 
     it("reassembles a frame split across two chunks in follow mode", async () => {
@@ -459,9 +475,11 @@ describe("Container Handlers", () => {
       const response = await request(server).get("/containers/abc123/logs").query({ follow: "true" });
 
       const events = response.text.trim().split("\n\n").filter(Boolean);
-      const dataLines = events.filter(e => e.startsWith("event: log")).map(e => JSON.parse(e.split("data: ")[1]));
+      const dataLines = events
+        .filter(e => e.startsWith("event: log"))
+        .map(e => JSON.parse(e.split("\n").find(line => line.startsWith("data: "))!.slice("data: ".length)));
 
-      expect(dataLines).toEqual([{ stream: "stdout", message: "hello world\n" }]);
+      expect(dataLines).toEqual([{ container_id: "abc123", ts: expect.any(Number), seq: 0, stream: "stdout", message: "hello world\n" }]);
     });
 
     it("passes the request's AbortSignal through to streamContainerLogs", async () => {
