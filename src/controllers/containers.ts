@@ -176,6 +176,8 @@ export function createContainerHandlers(dockerService: DockerService) {
 
   async function logs(ctx: Context) {
     const id = ctx.req.param("id");
+    // zValidator("query", containerLogsQuerySchema) has already rejected malformed input
+    // (non-numeric tail/since, anything but "true"/"false") with a 400 before this runs.
     const follow = ctx.req.query("follow") === "true";
     const tail = ctx.req.query("tail") ? Number(ctx.req.query("tail")) : undefined;
     const since = ctx.req.query("since") ? Number(ctx.req.query("since")) : undefined;
@@ -198,27 +200,19 @@ export function createContainerHandlers(dockerService: DockerService) {
       }
 
       return streamSSE(ctx, async sseStream => {
-        const dockerStream = await dockerService.streamContainerLogs(id, { tail, since, timestamps, stdout, stderr });
+        // Passing the request's own AbortSignal lets dockerode cancel the underlying HTTP
+        // request to the Docker daemon directly when the client disconnects — no manual
+        // stream.destroy() plumbing needed.
+        const dockerStream = await dockerService.streamContainerLogs(id, { tail, since, timestamps, stdout, stderr, abortSignal: ctx.req.raw.signal });
         const parser = new DockerLogFrameParser();
 
-        const stopStreaming = () => {
-          if ("destroy" in dockerStream && typeof dockerStream.destroy === "function") {
-            dockerStream.destroy();
-          }
-        };
-        ctx.req.raw.signal.addEventListener("abort", stopStreaming);
+        for await (const chunk of dockerStream) {
+          const buffer = Buffer.from(chunk);
+          const frames = tty ? [{ stream: "stdout" as const, message: stripAnsiCodes(buffer.toString("utf8")) }] : parser.push(buffer);
 
-        try {
-          for await (const chunk of dockerStream) {
-            const buffer = Buffer.from(chunk);
-            const frames = tty ? [{ stream: "stdout" as const, message: stripAnsiCodes(buffer.toString("utf8")) }] : parser.push(buffer);
-
-            for (const frame of frames) {
-              await sseStream.writeSSE({ event: "log", data: JSON.stringify(frame) });
-            }
+          for (const frame of frames) {
+            await sseStream.writeSSE({ event: "log", data: JSON.stringify(frame) });
           }
-        } finally {
-          ctx.req.raw.signal.removeEventListener("abort", stopStreaming);
         }
       }, async streamErr => {
         logError("Container", "Container log stream failed", { id, error: streamErr.message });

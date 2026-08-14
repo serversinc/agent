@@ -42,3 +42,25 @@ export const createContainerSchema = z.object({
     })
     .optional(),
 });
+
+/**
+ * Schema for GET /containers/:id/logs query params.
+ *
+ * Query values arrive as strings, so booleans are validated against the literal "true"/"false"
+ * rather than `z.coerce.boolean()` — coercion treats any non-empty string (including "false") as
+ * truthy, which would silently accept typos like `?follow=nope` as `true`.
+ */
+const booleanQueryParam = (defaultValue: boolean) =>
+  z
+    .enum(["true", "false"])
+    .optional()
+    .transform(value => (value === undefined ? defaultValue : value === "true"));
+
+export const containerLogsQuerySchema = z.object({
+  follow: booleanQueryParam(false),
+  tail: z.coerce.number().int().min(1).max(10_000).optional(),
+  since: z.coerce.number().int().min(0).optional(),
+  timestamps: booleanQueryParam(false),
+  stdout: booleanQueryParam(true),
+  stderr: booleanQueryParam(true),
+});
