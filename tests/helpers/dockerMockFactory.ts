@@ -14,6 +14,8 @@ export function createDockerMock(overrides: Partial<DockerService & { docker?: P
     startContainer: vi.fn() as any,
     stopContainer: vi.fn() as any,
     checkImageExists: vi.fn() as any,
+    getContainerLogs: vi.fn() as any,
+    streamContainerLogs: vi.fn() as any,
 
     // image-related
     listImages: vi.fn() as any,
