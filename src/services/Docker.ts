@@ -99,6 +99,49 @@ export class DockerService {
     }
   }
 
+  async getContainerLogs(
+    id: string,
+    options: { tail?: number; since?: number; timestamps?: boolean; stdout?: boolean; stderr?: boolean } = {},
+  ): Promise<Buffer> {
+    try {
+      const container = this.docker.getContainer(id);
+      // `follow: false` here is a literal, not `boolean` — that's what selects dockerode's
+      // `Promise<Buffer>` overload instead of `Promise<NodeJS.ReadableStream>`, so no cast needed.
+      return await container.logs({
+        follow: false,
+        stdout: options.stdout ?? true,
+        stderr: options.stderr ?? true,
+        tail: options.tail ?? 200,
+        since: options.since ?? 0,
+        timestamps: options.timestamps ?? false,
+      });
+    } catch (err) {
+      error(this.name, "Failed to get container logs", { id, error: (err as Error).message });
+      throw err;
+    }
+  }
+
+  async streamContainerLogs(
+    id: string,
+    options: { tail?: number; since?: number; timestamps?: boolean; stdout?: boolean; stderr?: boolean; abortSignal?: AbortSignal } = {},
+  ): Promise<NodeJS.ReadableStream> {
+    try {
+      const container = this.docker.getContainer(id);
+      return await container.logs({
+        follow: true,
+        stdout: options.stdout ?? true,
+        stderr: options.stderr ?? true,
+        tail: options.tail ?? 100,
+        since: options.since ?? 0,
+        timestamps: options.timestamps ?? false,
+        abortSignal: options.abortSignal,
+      });
+    } catch (err) {
+      error(this.name, "Failed to stream container logs", { id, error: (err as Error).message });
+      throw err;
+    }
+  }
+
   // IMAGES
 
   async listImages(): Promise<Docker.ImageInfo[]> {

@@ -1,9 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
+import { zValidator } from "@hono/zod-validator";
 import { createContainerHandlers } from "../../src/controllers/containers";
+import { containerLogsQuerySchema } from "../../src/validators/Containers";
 import { makeApp } from "../helpers/makeApp";
 import { createDockerMock } from "../helpers/dockerMockFactory";
 import { makeDockerMuxedBuffer } from "../helpers/streams";
+
+// Async iterable over a fixed list of chunks — stands in for the finite tail of a mocked
+// docker log stream. Real streams don't end this cleanly, but the test harness buffers the
+// full SSE response body, so the mock stream has to terminate for a request to resolve.
+function fakeLogStream(chunks: Buffer[]) {
+  return {
+    [Symbol.asyncIterator]: async function* () {
+      for (const chunk of chunks) yield chunk;
+    },
+  };
+}
 
 // Mock DockerService; silence console in this test file only
 vi.mock("../../src/services/Docker");
@@ -30,6 +43,7 @@ describe("Container Handlers", () => {
         app.post("/containers/:id/start", handlers.start);
         app.post("/containers/:id/stop", handlers.stop);
         app.post("/containers/:id/exec", handlers.runCommand);
+        app.get("/containers/:id/logs", zValidator("query", containerLogsQuerySchema), handlers.logs);
       },
       { auth: false },
     );
@@ -331,6 +345,148 @@ describe("Container Handlers", () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe("Container not found");
+    });
+  });
+
+  describe("GET /containers/:id/logs", () => {
+    it("returns demuxed one-shot logs for a non-tty container, in order", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.getContainerLogs.mockResolvedValue(makeDockerMuxedBuffer("out\n", "err\n"));
+
+      const response = await request(server).get("/containers/abc123/logs");
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        id: "abc123",
+        logs: [
+          { stream: "stdout", message: "out\n" },
+          { stream: "stderr", message: "err\n" },
+        ],
+      });
+    });
+
+    it("returns raw output for a tty container instead of demuxing", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: true } });
+      mockDockerService.getContainerLogs.mockResolvedValue(Buffer.from("raw tty output\n", "utf8"));
+
+      const response = await request(server).get("/containers/abc123/logs");
+
+      expect(response.status).toBe(200);
+      expect(response.body.logs).toEqual([{ stream: "stdout", message: "raw tty output\n" }]);
+    });
+
+    it("defaults tail/stdout/stderr and passes query params through to the service", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.getContainerLogs.mockResolvedValue(Buffer.alloc(0));
+
+      await request(server).get("/containers/abc123/logs").query({ tail: "50", since: "100", timestamps: "true", stdout: "false" });
+
+      expect(mockDockerService.getContainerLogs).toHaveBeenCalledWith("abc123", {
+        tail: 50,
+        since: 100,
+        timestamps: true,
+        stdout: false,
+        stderr: true,
+      });
+    });
+
+    it("rejects a non-numeric tail with 400 instead of falling through to Docker", async () => {
+      const response = await request(server).get("/containers/abc123/logs").query({ tail: "abc" });
+
+      expect(response.status).toBe(400);
+      expect(mockDockerService.getContainerLogs).not.toHaveBeenCalled();
+    });
+
+    it("rejects a tail above the cap with 400", async () => {
+      const response = await request(server).get("/containers/abc123/logs").query({ tail: "999999" });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects an unrecognized follow value with 400", async () => {
+      const response = await request(server).get("/containers/abc123/logs").query({ follow: "nope" });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 404 when the container doesn't exist, before ever opening a stream", async () => {
+      mockDockerService.getContainer.mockRejectedValue(new Error("Container not found"));
+
+      const response = await request(server).get("/containers/missing/logs").query({ follow: "true" });
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toBe("Container not found");
+      expect(mockDockerService.streamContainerLogs).not.toHaveBeenCalled();
+    });
+
+    it("handles one-shot fetch errors from the docker service", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.getContainerLogs.mockRejectedValue(new Error("Docker daemon not running"));
+
+      const response = await request(server).get("/containers/abc123/logs");
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe("Docker daemon not running");
+    });
+
+    it("streams live frames as SSE when follow=true, preserving order", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.streamContainerLogs.mockResolvedValue(fakeLogStream([makeDockerMuxedBuffer("first\n", ""), makeDockerMuxedBuffer("", "second\n")]));
+
+      const response = await request(server).get("/containers/abc123/logs").query({ follow: "true" });
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("text/event-stream");
+
+      const events = response.text.trim().split("\n\n").filter(Boolean);
+      const dataLines = events.filter(e => e.startsWith("event: log")).map(e => JSON.parse(e.split("data: ")[1]));
+
+      expect(dataLines).toEqual([
+        { stream: "stdout", message: "first\n" },
+        { stream: "stderr", message: "second\n" },
+      ]);
+    });
+
+    it("reassembles a frame split across two chunks in follow mode", async () => {
+      const full = makeDockerMuxedBuffer("hello world\n", "");
+      const firstChunk = full.subarray(0, 10);
+      const secondChunk = full.subarray(10);
+
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.streamContainerLogs.mockResolvedValue(fakeLogStream([firstChunk, secondChunk]));
+
+      const response = await request(server).get("/containers/abc123/logs").query({ follow: "true" });
+
+      const events = response.text.trim().split("\n\n").filter(Boolean);
+      const dataLines = events.filter(e => e.startsWith("event: log")).map(e => JSON.parse(e.split("data: ")[1]));
+
+      expect(dataLines).toEqual([{ stream: "stdout", message: "hello world\n" }]);
+    });
+
+    it("passes the request's AbortSignal through to streamContainerLogs", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.streamContainerLogs.mockResolvedValue(fakeLogStream([]));
+
+      await request(server).get("/containers/abc123/logs").query({ follow: "true" });
+
+      expect(mockDockerService.streamContainerLogs).toHaveBeenCalledWith(
+        "abc123",
+        expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+      );
+    });
+
+    it("emits an SSE error event when the docker stream fails mid-stream", async () => {
+      mockDockerService.getContainer.mockResolvedValue({ Id: "abc123", Config: { Tty: false } });
+      mockDockerService.streamContainerLogs.mockRejectedValue(new Error("stream broke"));
+
+      const response = await request(server).get("/containers/abc123/logs").query({ follow: "true" });
+
+      // Headers are already committed by the time the stream fails, so this can't become a
+      // real 4xx/5xx — the failure surfaces as an SSE error frame instead.
+      expect(response.status).toBe(200);
+      expect(response.text).toContain("event: error");
+      expect(response.text).toContain("stream broke");
     });
   });
 });

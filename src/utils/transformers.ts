@@ -61,6 +61,41 @@ export function stripAnsiCodes(input: string): string {
   return input.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
 }
 
+export interface DockerLogFrame {
+  stream: "stdout" | "stderr";
+  message: string;
+}
+
+/**
+ * Incrementally parses Docker's multiplexed log/attach stream format into ordered frames.
+ * Buffers any trailing partial frame between calls, so it can be fed chunks as they
+ * arrive off a live `follow: true` stream without losing data split across chunk boundaries.
+ */
+export class DockerLogFrameParser {
+  private pending: Buffer = Buffer.alloc(0);
+
+  push(chunk: Buffer): DockerLogFrame[] {
+    this.pending = this.pending.length ? Buffer.concat([this.pending, chunk]) : chunk;
+
+    const frames: DockerLogFrame[] = [];
+    let offset = 0;
+
+    while (offset + 8 <= this.pending.length) {
+      const streamType = this.pending[offset];
+      const size = this.pending.readUInt32BE(offset + 4);
+
+      if (offset + 8 + size > this.pending.length) break;
+
+      const data = this.pending.slice(offset + 8, offset + 8 + size).toString("utf8");
+      frames.push({ stream: streamType === 2 ? "stderr" : "stdout", message: stripAnsiCodes(data) });
+      offset += 8 + size;
+    }
+
+    this.pending = offset > 0 ? this.pending.slice(offset) : this.pending;
+    return frames;
+  }
+}
+
 /**
  * Demultiplexes a Docker stream buffer into stdout and stderr
  * @param buffer Buffer containing the Docker stream data

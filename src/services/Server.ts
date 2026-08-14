@@ -3,7 +3,7 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { zValidator } from "@hono/zod-validator";
 
-import { createContainerSchema } from "../validators/Containers";
+import { createContainerSchema, containerLogsQuerySchema } from "../validators/Containers";
 import { pullImageSchema } from "../validators/Images";
 import { createNetworkSchema } from "../validators/Networks";
 import { createVolumeSchema } from "../validators/Volumes";
@@ -70,6 +70,7 @@ export function startServer(
   app.post("/containers/:id/stop", containerHandlers.stop);
   app.post("/containers/:id/restart", containerHandlers.restart);
   app.post("/containers/:id/command", containerHandlers.runCommand);
+  app.get("/containers/:id/logs", zValidator("query", containerLogsQuerySchema), containerHandlers.logs);
 
   // Images
   app.get("/images", imageHandlers.list);
