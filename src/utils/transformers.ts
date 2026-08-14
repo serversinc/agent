@@ -68,8 +68,8 @@ export interface DockerLogFrame {
 
 /**
  * A DockerLogFrame stamped with identity — the shape actually sent to callers.
- * `container_id` + `seq` are what let a Live Worker set `Last-Event-ID` and a Search Worker
- * order/dedupe across the live and history paths (see serversinc/api#62 design notes).
+ * `container_id` + `seq` give a caller enough to set SSE's `Last-Event-ID` for reconnects, and
+ * to order/dedupe lines when combining a live tail with logs fetched from elsewhere.
  *
  * `ts` is currently the agent's own processing time, not Docker's original per-line log
  * timestamp — Docker only emits that when `timestamps: true` is requested from its API, and
