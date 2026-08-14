@@ -1,7 +1,7 @@
 import { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 
-import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser, DockerLogFrame } from "../utils/transformers";
+import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser, DockerLogFrame, LogFrame } from "../utils/transformers";
 import { DockerService } from "../services/Docker";
 import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
@@ -191,9 +191,15 @@ export function createContainerHandlers(dockerService: DockerService) {
 
       if (!follow) {
         const buffer = await dockerService.getContainerLogs(id, { tail, since, timestamps, stdout, stderr });
-        const logLines: DockerLogFrame[] = tty
+        const rawFrames: DockerLogFrame[] = tty
           ? [{ stream: "stdout", message: stripAnsiCodes(buffer.toString("utf8")) }]
           : new DockerLogFrameParser().push(buffer);
+
+        // One response, one timestamp — these lines don't each have a known individual
+        // creation time yet (see LogFrame's docs), so stamping them all "as of now" is more
+        // honest than implying per-line precision we don't have.
+        const now = Date.now();
+        const logLines: LogFrame[] = rawFrames.map((frame, index) => ({ container_id: id, ts: now, seq: index, ...frame }));
 
         info("Container", "Fetched container logs", { id, tail, lines: logLines.length });
         return ctx.json({ success: true, id, logs: logLines });
@@ -205,13 +211,17 @@ export function createContainerHandlers(dockerService: DockerService) {
         // stream.destroy() plumbing needed.
         const dockerStream = await dockerService.streamContainerLogs(id, { tail, since, timestamps, stdout, stderr, abortSignal: ctx.req.raw.signal });
         const parser = new DockerLogFrameParser();
+        let seq = 0;
 
         for await (const chunk of dockerStream) {
           const buffer = Buffer.from(chunk);
-          const frames = tty ? [{ stream: "stdout" as const, message: stripAnsiCodes(buffer.toString("utf8")) }] : parser.push(buffer);
+          const rawFrames = tty ? [{ stream: "stdout" as const, message: stripAnsiCodes(buffer.toString("utf8")) }] : parser.push(buffer);
 
-          for (const frame of frames) {
-            await sseStream.writeSSE({ event: "log", data: JSON.stringify(frame) });
+          for (const frame of rawFrames) {
+            const stamped: LogFrame = { container_id: id, ts: Date.now(), seq: seq++, ...frame };
+            // `id` on the SSE event (not the frame's own container_id) is what lets a
+            // browser's EventSource resume via Last-Event-ID after a reconnect.
+            await sseStream.writeSSE({ event: "log", data: JSON.stringify(stamped), id: String(stamped.seq) });
           }
         }
       }, async streamErr => {

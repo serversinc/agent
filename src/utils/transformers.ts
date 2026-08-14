@@ -67,6 +67,23 @@ export interface DockerLogFrame {
 }
 
 /**
+ * A DockerLogFrame stamped with identity — the shape actually sent to callers.
+ * `container_id` + `seq` are what let a Live Worker set `Last-Event-ID` and a Search Worker
+ * order/dedupe across the live and history paths (see serversinc/api#62 design notes).
+ *
+ * `ts` is currently the agent's own processing time, not Docker's original per-line log
+ * timestamp — Docker only emits that when `timestamps: true` is requested from its API, and
+ * it arrives embedded in the message text rather than as structured data. Wiring that up is
+ * follow-up work; `ts` here is accurate enough for ordering/pagination in the meantime, since
+ * `seq` (not `ts`) is the real ordering key within one connection.
+ */
+export interface LogFrame extends DockerLogFrame {
+  container_id: string;
+  ts: number;
+  seq: number;
+}
+
+/**
  * Incrementally parses Docker's multiplexed log/attach stream format into ordered frames.
  * Buffers any trailing partial frame between calls, so it can be fed chunks as they
  * arrive off a live `follow: true` stream without losing data split across chunk boundaries.
