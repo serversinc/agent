@@ -56,6 +56,8 @@ const configSchema = z.object({
     .default("86400000")
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive().max(604800000)),
+
+  REPOS_DIR: z.string().default("repos"),
 });
 
 // Infer the TypeScript type from the schema
@@ -77,6 +79,7 @@ function loadConfig(): AppConfig {
       HEARTBEAT_INTERVAL_MS: process.env.HEARTBEAT_INTERVAL_MS,
       METRICS_INTERVAL_MS: process.env.METRICS_INTERVAL_MS,
       STATE_CHECK_INTERVAL_MS: process.env.STATE_CHECK_INTERVAL_MS,
+      REPOS_DIR: process.env.REPOS_DIR,
     });
 
     // Load the public key file

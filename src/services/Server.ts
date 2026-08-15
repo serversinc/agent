@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import { zValidator } from "@hono/zod-validator";
 
 import { createContainerSchema, containerLogsQuerySchema } from "../validators/Containers";
-import { pullImageSchema } from "../validators/Images";
+import { pullImageSchema, createImageSchema } from "../validators/Images";
 import { createNetworkSchema } from "../validators/Networks";
 import { createVolumeSchema } from "../validators/Volumes";
 import { runShellSchema, runComposeSchema, execContainerSchema } from "../validators/Shell";
@@ -76,6 +76,7 @@ export function startServer(
   app.get("/images", imageHandlers.list);
   app.get("/images/:id", imageHandlers.get);
   app.post("/images/pull", zValidator("json", pullImageSchema), imageHandlers.pull);
+  app.post("/images", zValidator("json", createImageSchema), imageHandlers.build);
   app.delete("/images/:id", imageHandlers.remove);
 
   // Networks

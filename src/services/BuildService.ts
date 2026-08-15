@@ -1,0 +1,92 @@
+import { randomUUID } from "crypto";
+import { existsSync } from "fs";
+import { mkdir, rm } from "fs/promises";
+import { join } from "path";
+
+import { DockerService } from "./Docker";
+import { GitService, GitCloneError } from "./Git";
+import { httpService } from "./Http";
+import { error, info } from "../utils/console";
+import config from "../config";
+
+export interface BuildOptions {
+  name: string; // owner/repo
+  tag: string; // commit sha
+  applicationId: string;
+  token: string;
+  buildArgs?: Record<string, string>;
+}
+
+type BuildFailureReason = GitCloneError["reason"] | "no_dockerfile" | "build_failed" | "invalid_application_id";
+
+class NoDockerfileError extends Error {
+  readonly reason = "no_dockerfile" as const;
+}
+
+export class BuildService {
+  public readonly name = "Build";
+
+  constructor(
+    private readonly dockerService: DockerService,
+    private readonly gitService: GitService = new GitService(),
+  ) {}
+
+  // Fire-and-forget entry point: clones, builds, and reports the outcome to CORE_URL.
+  // Never throws — failures are reported as a `build.failed` event instead.
+  async buildFromRepo(options: BuildOptions): Promise<void> {
+    const { name, tag, applicationId, token, buildArgs } = options;
+    const imageTag = `${name.toLowerCase()}:${tag}`;
+
+    // applicationId feeds directly into a filesystem path below. The HTTP-layer schema already
+    // requires a ULID, but that's a caller-side guarantee — re-check it here since this is the
+    // code that would actually suffer a path-traversal write/rm if it were ever wrong.
+    if (!/^[A-Za-z0-9_-]+$/.test(applicationId)) {
+      error(this.name, "Refusing to build: unsafe applicationId", { applicationId });
+      await this.reportFailure(applicationId, name, tag, "invalid_application_id", "Invalid applicationId");
+      return;
+    }
+
+    const workDir = join(config.REPOS_DIR, `${applicationId}-${randomUUID()}`);
+
+    try {
+      await mkdir(workDir, { recursive: true });
+
+      // GitService always rejects with a GitCloneError (clone_failed | checkout_failed) — that's
+      // its contract, so no need to normalize other error shapes here.
+      await this.gitService.cloneAndCheckout(name, tag, token, workDir);
+
+      if (!existsSync(join(workDir, "Dockerfile"))) {
+        throw new NoDockerfileError(`No Dockerfile found at the root of ${name}@${tag}`);
+      }
+
+      await this.dockerService.buildImage(workDir, imageTag, buildArgs);
+
+      info(this.name, "Build completed", { name, tag, applicationId, image: imageTag });
+
+      // `image` is the exact reference the caller can hand straight to POST /containers.
+      await httpService.postSafe({
+        type: "build.completed",
+        applicationId,
+        image: imageTag,
+      });
+    } catch (err) {
+      const reason: BuildFailureReason = err instanceof GitCloneError || err instanceof NoDockerfileError ? err.reason : "build_failed";
+      await this.reportFailure(applicationId, name, tag, reason, (err as Error).message);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  }
+
+  private async reportFailure(applicationId: string, repo: string, commit: string, reason: BuildFailureReason, message: string): Promise<void> {
+    error(this.name, "Build failed", { repo, commit, applicationId, reason, error: message });
+
+    await httpService.postSafe({
+      type: "build.failed",
+      applicationId,
+      repo,
+      commit,
+      reason,
+      error: message,
+    });
+  }
+}
