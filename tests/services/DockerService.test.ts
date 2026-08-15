@@ -3,6 +3,10 @@ import { DockerService } from "../../src/services/Docker";
 
 vi.mock("../../src/utils/console", () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), success: vi.fn(), _setLogger: vi.fn() }));
 
+// Docker.ts pulls in the real config module at import time, which requires a full .env (PEM
+// path, SERVER_ID, etc.) that isn't present in CI — mock it rather than needing those secrets.
+vi.mock("../../src/config", () => ({ default: { DOCKER_SOCKET: "/tmp/nonexistent.sock" } }));
+
 // DockerService always constructs a real dockerode client, so we monkeypatch the low-level
 // `docker.buildImage` / `docker.pull` / `docker.modem.followProgress` calls it wraps rather
 // than mocking the whole `dockerode` module.
