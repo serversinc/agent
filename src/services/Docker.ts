@@ -15,6 +15,12 @@ interface PullProgressEvent {
   id?: string;
 }
 
+interface BuildProgressEvent {
+  stream?: string;
+  error?: string;
+  errorDetail?: { message?: string; code?: number };
+}
+
 export class DockerService {
   public readonly name = "Docker";
   public readonly docker: Docker;
@@ -172,42 +178,74 @@ export class DockerService {
       await this.validateAuth(authconfig, name);
     }
 
-    return new Promise((resolve, reject) => {
+    const stream = await new Promise<NodeJS.ReadableStream>((resolve, reject) => {
       this.docker.pull(name, { authconfig }, (err, stream) => {
         if (err) {
           error(this.name, "Failed to pull image", { name, error: err.message });
           return reject(err);
         }
-
         if (!stream) {
           error(this.name, "No stream returned from pull", { name });
           return reject(new Error("No stream returned from Docker pull"));
         }
-
-        this.docker.modem.followProgress(
-          stream,
-          (err, output) => {
-            if (err) {
-              error(this.name, "Image pull failed", { name, error: err.message });
-              return reject(err);
-            }
-            info(this.name, "Successfully pulled image", { name });
-            resolve();
-          },
-          (event: PullProgressEvent) => {
-            if (event?.status) {
-              // Only log significant progress events to reduce noise
-              if (this.isSignificantProgressEvent(event.status)) {
-                info(this.name, "Image pull progress", {
-                  name,
-                  status: event.status,
-                  progress: event.progress,
-                });
-              }
-            }
-          },
-        );
+        resolve(stream);
       });
+    });
+
+    try {
+      await this.followProgress<PullProgressEvent>(stream, event => {
+        // Only log significant progress events to reduce noise
+        if (event?.status && this.isSignificantProgressEvent(event.status)) {
+          info(this.name, "Image pull progress", { name, status: event.status, progress: event.progress });
+        }
+      });
+    } catch (err) {
+      error(this.name, "Image pull failed", { name, error: (err as Error).message });
+      throw err;
+    }
+
+    info(this.name, "Successfully pulled image", { name });
+  }
+
+  async buildImage(contextPath: string, tag: string): Promise<void> {
+    info(this.name, "Building image", { contextPath, tag });
+
+    const stream = await this.docker.buildImage({ context: contextPath, src: ["."] }, { t: tag });
+
+    let output: BuildProgressEvent[];
+    try {
+      output = await this.followProgress<BuildProgressEvent>(stream, event => {
+        const line = event?.stream?.trim();
+        if (line) info(this.name, "Image build progress", { tag, line });
+      });
+    } catch (err) {
+      error(this.name, "Image build failed", { tag, error: (err as Error).message });
+      throw err;
+    }
+
+    // A failed `docker build` still resolves the stream with HTTP 200 — the failure only
+    // shows up as an `error`/`errorDetail` event buried in the output, not a rejected promise.
+    const failure = output.find(event => event.error || event.errorDetail);
+    if (failure) {
+      const message = failure.errorDetail?.message || failure.error || "Docker build failed";
+      error(this.name, "Image build failed", { tag, error: message });
+      throw new Error(message);
+    }
+
+    info(this.name, "Successfully built image", { tag });
+  }
+
+  // Wraps dockerode's callback-based followProgress in a promise, resolving with the full
+  // array of progress events once the stream ends. Shared by pullImage and buildImage, whose
+  // completion semantics differ (a failed pull rejects; a failed build resolves with an error
+  // event) — so error interpretation stays with the caller.
+  private followProgress<T>(stream: NodeJS.ReadableStream, onProgress: (event: T) => void): Promise<T[]> {
+    return new Promise((resolve, reject) => {
+      this.docker.modem.followProgress(
+        stream,
+        (err, output) => (err ? reject(err) : resolve(output as T[])),
+        onProgress,
+      );
     });
   }
 

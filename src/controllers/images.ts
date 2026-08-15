@@ -1,14 +1,23 @@
 import { Context } from "hono";
 import { DockerService } from "../services/Docker";
-import { info } from "../utils/console";
+import { BuildService } from "../services/BuildService";
+import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
 
 interface PullOptions {
   name: string;
 }
 
-export function createImageHandlers(dockerService: DockerService) {
+interface CreateImageOptions {
+  name: string;
+  tag: string;
+  applicationId: string;
+  token: string;
+}
+
+export function createImageHandlers(dockerService: DockerService, buildService: BuildService) {
   if (!dockerService) throw new Error("Docker service is required");
+  if (!buildService) throw new Error("Build service is required");
 
   async function list(ctx: Context) {
     try {
@@ -45,6 +54,25 @@ export function createImageHandlers(dockerService: DockerService) {
     }
   }
 
+  async function build(ctx: Context) {
+    try {
+      const options = (await ctx.req.json()) as CreateImageOptions;
+      const { name, tag, applicationId } = options;
+
+      info("Image", "Build requested", { name, tag, applicationId });
+
+      // Fire-and-forget: BuildService reports completion/failure to CORE_URL itself,
+      // since a clone + build can outlast the caller's HTTP timeout.
+      buildService.buildFromRepo(options).catch(err => {
+        logError("Image", "Unhandled build error", { name, tag, applicationId, error: (err as Error).message });
+      });
+
+      return ctx.json({ success: true, message: "build started", image: { name, tag, applicationId } }, 202);
+    } catch (err) {
+      return handleError(ctx, err, "Image", "start image build");
+    }
+  }
+
   async function remove(ctx: Context) {
     try {
       const id = ctx.req.param("id");
@@ -68,6 +96,7 @@ export function createImageHandlers(dockerService: DockerService) {
     list,
     get,
     pull,
+    build,
     remove,
     prune,
   };

@@ -10,16 +10,19 @@ vi.mock("../../src/utils/console", () => ({ info: vi.fn(), error: vi.fn(), warn:
 describe("Image Handlers", () => {
   let server: import("http").Server;
   let mockDockerService: any;
+  let mockBuildService: any;
   let closeFn: (() => Promise<void>) | null = null;
 
   beforeEach(async () => {
     mockDockerService = createDockerMock();
-    const handlers = createImageHandlers(mockDockerService);
+    mockBuildService = { buildFromRepo: vi.fn().mockResolvedValue(undefined) };
+    const handlers = createImageHandlers(mockDockerService, mockBuildService);
     const s = await makeApp(
       app => {
         app.get("/images", handlers.list);
         app.get("/images/:id", handlers.get);
         app.post("/images/pull", handlers.pull);
+        app.post("/images", handlers.build);
         app.delete("/images/:id", handlers.remove);
         app.post("/images/prune", handlers.prune);
       },
@@ -96,6 +99,37 @@ describe("Image Handlers", () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe("pull access denied");
+    });
+  });
+
+  describe("POST /images", () => {
+    const body = { name: "owner/repo", tag: "abc123", applicationId: "app_1", token: "gh_token" };
+
+    it("starts a build and returns 202 immediately", async () => {
+      const response = await request(server).post("/images").send(body);
+
+      expect(response.status).toBe(202);
+      expect(response.body.success).toBe(true);
+      expect(response.body.image).toEqual({ name: "owner/repo", tag: "abc123", applicationId: "app_1" });
+      expect(mockBuildService.buildFromRepo).toHaveBeenCalledWith(body);
+    });
+
+    it("does not wait for the build to finish before responding", async () => {
+      let resolveBuild: () => void = () => {};
+      mockBuildService.buildFromRepo.mockReturnValue(new Promise<void>(resolve => (resolveBuild = resolve)));
+
+      const response = await request(server).post("/images").send(body);
+
+      expect(response.status).toBe(202);
+      resolveBuild();
+    });
+
+    it("still returns 202 when the build promise rejects asynchronously", async () => {
+      mockBuildService.buildFromRepo.mockRejectedValue(new Error("boom"));
+
+      const response = await request(server).post("/images").send(body);
+
+      expect(response.status).toBe(202);
     });
   });
 

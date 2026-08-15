@@ -8,6 +8,7 @@ import { createPackageHandlers } from "./controllers/packages";
 
 import { startServer } from "./services/Server";
 import { DockerService } from "./services/Docker";
+import { BuildService } from "./services/BuildService";
 import { ShellService } from "./services/Shell";
 import { WatcherService } from "./services/Watcher";
 import { heartbeatService } from "./services/HeartbeatService";
@@ -19,6 +20,7 @@ import { packageService } from "./services/PackageService";
 import config from "./config";
 
 const dockerService  = new DockerService(config.DOCKER_SOCKET);
+const buildService   = new BuildService(dockerService);
 const shellService   = new ShellService();
 const watcherService = new WatcherService(dockerService);
 
@@ -28,7 +30,7 @@ metricsService.start();
 stateCheckService.start();
 
 const containerHandlers = createContainerHandlers(dockerService);
-const imageHandlers     = createImageHandlers(dockerService);
+const imageHandlers     = createImageHandlers(dockerService, buildService);
 const networkHandlers   = createNetworkHandlers(dockerService);
 const volumeHandlers    = createVolumeHandlers(dockerService);
 const shellHandlers     = createShellHandlers(shellService, dockerService);
