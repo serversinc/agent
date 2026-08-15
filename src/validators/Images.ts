@@ -9,4 +9,5 @@ export const createImageSchema = z.object({
   tag: z.string().regex(/^[0-9a-fA-F]{7,40}$/, "tag must be a git commit sha"),
   applicationId: z.string().ulid("applicationId must be a ULID"),
   token: z.string().min(1),
+  buildArgs: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "build arg keys must be valid identifiers"), z.string()).optional(),
 });

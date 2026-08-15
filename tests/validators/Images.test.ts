@@ -34,4 +34,17 @@ describe("createImageSchema", () => {
   it("rejects an empty token", () => {
     expect(createImageSchema.safeParse({ ...valid, token: "" }).success).toBe(false);
   });
+
+  it("accepts a payload without buildArgs", () => {
+    expect(createImageSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("accepts valid buildArgs", () => {
+    const result = createImageSchema.safeParse({ ...valid, buildArgs: { NODE_ENV: "production", API_URL: "https://example.com" } });
+    expect(result.success).toBe(true);
+  });
+
+  it.each(["1BAD", "bad-key", "bad key", ""])("rejects a buildArgs key that isn't a valid identifier %j", key => {
+    expect(createImageSchema.safeParse({ ...valid, buildArgs: { [key]: "value" } }).success).toBe(false);
+  });
 });

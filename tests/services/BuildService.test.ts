@@ -39,12 +39,28 @@ describe("BuildService", () => {
     await service.buildFromRepo(options);
 
     expect(gitService.cloneAndCheckout).toHaveBeenCalledWith("owner/repo", "abc123", "gh_token", expect.any(String));
-    expect(dockerService.buildImage).toHaveBeenCalledWith(expect.any(String), "owner/repo:abc123");
+    expect(dockerService.buildImage).toHaveBeenCalledWith(expect.any(String), "owner/repo:abc123", undefined);
     expect(postSafeMock).toHaveBeenCalledWith({
       type: "build.completed",
       applicationId: "app_1",
       image: "owner/repo:abc123",
     });
+  });
+
+  it("forwards buildArgs to DockerService.buildImage", async () => {
+    const dockerService = { buildImage: vi.fn().mockResolvedValue(undefined) };
+    const gitService = {
+      cloneAndCheckout: vi.fn().mockImplementation(async (_repo, _tag, _token, destDir) => {
+        const { mkdir, writeFile } = await import("fs/promises");
+        await mkdir(destDir, { recursive: true });
+        await writeFile(join(destDir, "Dockerfile"), "FROM scratch\n");
+      }),
+    };
+
+    const service = new BuildService(dockerService as any, gitService as any);
+    await service.buildFromRepo({ ...options, buildArgs: { NODE_ENV: "production" } });
+
+    expect(dockerService.buildImage).toHaveBeenCalledWith(expect.any(String), "owner/repo:abc123", { NODE_ENV: "production" });
   });
 
   it("reports build.failed distinctly for a clone failure, without touching Docker", async () => {

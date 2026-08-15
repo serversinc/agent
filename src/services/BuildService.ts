@@ -14,6 +14,7 @@ export interface BuildOptions {
   tag: string; // commit sha
   applicationId: string;
   token: string;
+  buildArgs?: Record<string, string>;
 }
 
 type BuildFailureReason = GitCloneError["reason"] | "no_dockerfile" | "build_failed" | "invalid_application_id";
@@ -33,7 +34,7 @@ export class BuildService {
   // Fire-and-forget entry point: clones, builds, and reports the outcome to CORE_URL.
   // Never throws — failures are reported as a `build.failed` event instead.
   async buildFromRepo(options: BuildOptions): Promise<void> {
-    const { name, tag, applicationId, token } = options;
+    const { name, tag, applicationId, token, buildArgs } = options;
     const imageTag = `${name.toLowerCase()}:${tag}`;
 
     // applicationId feeds directly into a filesystem path below. The HTTP-layer schema already
@@ -58,7 +59,7 @@ export class BuildService {
         throw new NoDockerfileError(`No Dockerfile found at the root of ${name}@${tag}`);
       }
 
-      await this.dockerService.buildImage(workDir, imageTag);
+      await this.dockerService.buildImage(workDir, imageTag, buildArgs);
 
       info(this.name, "Build completed", { name, tag, applicationId, image: imageTag });
 

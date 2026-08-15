@@ -207,10 +207,10 @@ export class DockerService {
     info(this.name, "Successfully pulled image", { name });
   }
 
-  async buildImage(contextPath: string, tag: string): Promise<void> {
-    info(this.name, "Building image", { contextPath, tag });
+  async buildImage(contextPath: string, tag: string, buildArgs?: Record<string, string>): Promise<void> {
+    info(this.name, "Building image", { contextPath, tag, buildArgs: buildArgs ? Object.keys(buildArgs) : undefined });
 
-    const stream = await this.docker.buildImage({ context: contextPath, src: ["."] }, { t: tag });
+    const stream = await this.docker.buildImage({ context: contextPath, src: ["."] }, { t: tag, buildargs: buildArgs });
 
     let output: BuildProgressEvent[];
     try {

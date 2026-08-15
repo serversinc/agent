@@ -28,7 +28,19 @@ describe("DockerService", () => {
       };
 
       await expect(service.buildImage("/ctx", "myapp:sha")).resolves.toBeUndefined();
-      expect((service.docker as any).buildImage).toHaveBeenCalledWith({ context: "/ctx", src: ["."] }, { t: "myapp:sha" });
+      expect((service.docker as any).buildImage).toHaveBeenCalledWith({ context: "/ctx", src: ["."] }, { t: "myapp:sha", buildargs: undefined });
+    });
+
+    it("passes buildArgs through as dockerode's buildargs option", async () => {
+      (service.docker as any).buildImage = vi.fn().mockResolvedValue("fake-stream");
+      (service.docker as any).modem = { followProgress: (_stream: unknown, cb: any) => cb(null, []) };
+
+      await service.buildImage("/ctx", "myapp:sha", { NODE_ENV: "production" });
+
+      expect((service.docker as any).buildImage).toHaveBeenCalledWith(
+        { context: "/ctx", src: ["."] },
+        { t: "myapp:sha", buildargs: { NODE_ENV: "production" } },
+      );
     });
 
     it("rejects with the embedded error message when the build fails (HTTP 200, error in the stream)", async () => {
