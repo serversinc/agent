@@ -12,6 +12,7 @@ interface CreateImageOptions {
   name: string;
   tag: string;
   applicationId: string;
+  deploymentId: string;
   token: string;
 }
 
@@ -57,9 +58,9 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
   async function build(ctx: Context) {
     try {
       const options = (await ctx.req.json()) as CreateImageOptions;
-      const { name, tag, applicationId } = options;
+      const { name, tag, applicationId, deploymentId } = options;
 
-      info("Image", "Build requested", { name, tag, applicationId });
+      info("Image", "Build requested", { name, tag, applicationId, deploymentId });
 
       // Fire-and-forget: BuildService reports completion/failure to CORE_URL itself,
       // since a clone + build can outlast the caller's HTTP timeout.

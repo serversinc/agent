@@ -103,7 +103,7 @@ describe("Image Handlers", () => {
   });
 
   describe("POST /images", () => {
-    const body = { name: "owner/repo", tag: "abc123", applicationId: "app_1", token: "gh_token" };
+    const body = { name: "owner/repo", tag: "abc123", applicationId: "app_1", deploymentId: "deploy_1", token: "gh_token" };
 
     it("starts a build and returns 202 immediately", async () => {
       const response = await request(server).post("/images").send(body);

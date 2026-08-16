@@ -13,6 +13,7 @@ export interface BuildOptions {
   name: string; // owner/repo
   tag: string; // commit sha
   applicationId: string;
+  deploymentId: string;
   token: string;
   buildArgs?: Record<string, string>;
 }
@@ -34,7 +35,7 @@ export class BuildService {
   // Fire-and-forget entry point: clones, builds, and reports the outcome to CORE_URL.
   // Never throws — failures are reported as a `build_failed` event instead.
   async buildFromRepo(options: BuildOptions): Promise<void> {
-    const { name, tag, applicationId, token, buildArgs } = options;
+    const { name, tag, applicationId, deploymentId, token, buildArgs } = options;
     const imageTag = `${name.toLowerCase()}:${tag}`;
 
     // applicationId feeds directly into a filesystem path below. The HTTP-layer schema already
@@ -42,7 +43,7 @@ export class BuildService {
     // code that would actually suffer a path-traversal write/rm if it were ever wrong.
     if (!/^[A-Za-z0-9_-]+$/.test(applicationId)) {
       error(this.name, "Refusing to build: unsafe applicationId", { applicationId });
-      await this.reportFailure(applicationId, name, tag, "invalid_application_id", "Invalid applicationId");
+      await this.reportFailure(applicationId, deploymentId, name, tag, "invalid_application_id", "Invalid applicationId");
       return;
     }
 
@@ -61,28 +62,41 @@ export class BuildService {
 
       await this.dockerService.buildImage(workDir, imageTag, buildArgs);
 
-      info(this.name, "Build completed", { name, tag, applicationId, image: imageTag });
+      info(this.name, "Build completed", { name, tag, applicationId, deploymentId, image: imageTag });
 
       // `image` is the exact reference the caller can hand straight to POST /containers.
+      // deploymentId lets the caller update the exact Deployment this build was for,
+      // rather than guessing "whichever build is still pending for this application" —
+      // which breaks as soon as two builds for the same app are in flight or one was
+      // never resolved.
       await httpService.postSafe({
         type: "build_completed",
         applicationId,
+        deploymentId,
         image: imageTag,
       });
     } catch (err) {
       const reason: BuildFailureReason = err instanceof GitCloneError || err instanceof NoDockerfileError ? err.reason : "build_failed";
-      await this.reportFailure(applicationId, name, tag, reason, (err as Error).message);
+      await this.reportFailure(applicationId, deploymentId, name, tag, reason, (err as Error).message);
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }
   }
 
-  private async reportFailure(applicationId: string, repo: string, commit: string, reason: BuildFailureReason, message: string): Promise<void> {
-    error(this.name, "Build failed", { repo, commit, applicationId, reason, error: message });
+  private async reportFailure(
+    applicationId: string,
+    deploymentId: string,
+    repo: string,
+    commit: string,
+    reason: BuildFailureReason,
+    message: string,
+  ): Promise<void> {
+    error(this.name, "Build failed", { repo, commit, applicationId, deploymentId, reason, error: message });
 
     await httpService.postSafe({
       type: "build_failed",
       applicationId,
+      deploymentId,
       repo,
       commit,
       reason,

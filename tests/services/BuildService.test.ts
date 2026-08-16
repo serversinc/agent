@@ -14,7 +14,7 @@ vi.mock("../../src/services/Http", () => ({ httpService: { postSafe: postSafeMoc
 vi.mock("../../src/config", () => ({ default: { REPOS_DIR: join(tmpdir(), "agent-build-test") } }));
 
 describe("BuildService", () => {
-  const options = { name: "owner/repo", tag: "abc123", applicationId: "app_1", token: "gh_token" };
+  const options = { name: "owner/repo", tag: "abc123", applicationId: "app_1", deploymentId: "deploy_1", token: "gh_token" };
 
   beforeEach(() => {
     postSafeMock.mockClear();
@@ -43,6 +43,7 @@ describe("BuildService", () => {
     expect(postSafeMock).toHaveBeenCalledWith({
       type: "build_completed",
       applicationId: "app_1",
+      deploymentId: "deploy_1",
       image: "owner/repo:abc123",
     });
   });

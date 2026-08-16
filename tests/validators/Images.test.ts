@@ -6,6 +6,7 @@ describe("createImageSchema", () => {
     name: "owner/repo",
     tag: "a1b2c3d",
     applicationId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    deploymentId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
     token: "gh_token",
   };
 
@@ -29,6 +30,10 @@ describe("createImageSchema", () => {
 
   it.each(["../../etc/passwd", "app_1", "not-a-ulid"])("rejects a non-ULID applicationId %j", applicationId => {
     expect(createImageSchema.safeParse({ ...valid, applicationId }).success).toBe(false);
+  });
+
+  it.each(["../../etc/passwd", "deploy_1", "not-a-ulid"])("rejects a non-ULID deploymentId %j", deploymentId => {
+    expect(createImageSchema.safeParse({ ...valid, deploymentId }).success).toBe(false);
   });
 
   it("rejects an empty token", () => {
