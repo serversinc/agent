@@ -32,7 +32,7 @@ export class BuildService {
   ) {}
 
   // Fire-and-forget entry point: clones, builds, and reports the outcome to CORE_URL.
-  // Never throws — failures are reported as a `build.failed` event instead.
+  // Never throws — failures are reported as a `build_failed` event instead.
   async buildFromRepo(options: BuildOptions): Promise<void> {
     const { name, tag, applicationId, token, buildArgs } = options;
     const imageTag = `${name.toLowerCase()}:${tag}`;
@@ -65,7 +65,7 @@ export class BuildService {
 
       // `image` is the exact reference the caller can hand straight to POST /containers.
       await httpService.postSafe({
-        type: "build.completed",
+        type: "build_completed",
         applicationId,
         image: imageTag,
       });
@@ -81,7 +81,7 @@ export class BuildService {
     error(this.name, "Build failed", { repo, commit, applicationId, reason, error: message });
 
     await httpService.postSafe({
-      type: "build.failed",
+      type: "build_failed",
       applicationId,
       repo,
       commit,

@@ -24,7 +24,7 @@ describe("BuildService", () => {
     await rm(join(tmpdir(), "agent-build-test"), { recursive: true, force: true });
   });
 
-  it("clones, builds, and reports build.completed on success", async () => {
+  it("clones, builds, and reports build_completed on success", async () => {
     const dockerService = { buildImage: vi.fn().mockResolvedValue(undefined) };
     const gitService = {
       cloneAndCheckout: vi.fn().mockImplementation(async (_repo, _tag, _token, destDir) => {
@@ -41,7 +41,7 @@ describe("BuildService", () => {
     expect(gitService.cloneAndCheckout).toHaveBeenCalledWith("owner/repo", "abc123", "gh_token", expect.any(String));
     expect(dockerService.buildImage).toHaveBeenCalledWith(expect.any(String), "owner/repo:abc123", undefined);
     expect(postSafeMock).toHaveBeenCalledWith({
-      type: "build.completed",
+      type: "build_completed",
       applicationId: "app_1",
       image: "owner/repo:abc123",
     });
@@ -63,7 +63,7 @@ describe("BuildService", () => {
     expect(dockerService.buildImage).toHaveBeenCalledWith(expect.any(String), "owner/repo:abc123", { NODE_ENV: "production" });
   });
 
-  it("reports build.failed distinctly for a clone failure, without touching Docker", async () => {
+  it("reports build_failed distinctly for a clone failure, without touching Docker", async () => {
     const dockerService = { buildImage: vi.fn() };
     const gitService = {
       cloneAndCheckout: vi.fn().mockRejectedValue(new GitCloneError("auth failed", "clone_failed")),
@@ -74,11 +74,11 @@ describe("BuildService", () => {
 
     expect(dockerService.buildImage).not.toHaveBeenCalled();
     expect(postSafeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "build.failed", applicationId: "app_1", reason: "clone_failed", error: expect.stringContaining("auth failed") }),
+      expect.objectContaining({ type: "build_failed", applicationId: "app_1", reason: "clone_failed", error: expect.stringContaining("auth failed") }),
     );
   });
 
-  it("reports build.failed distinctly for a missing Dockerfile, without touching Docker", async () => {
+  it("reports build_failed distinctly for a missing Dockerfile, without touching Docker", async () => {
     const dockerService = { buildImage: vi.fn() };
     const gitService = {
       cloneAndCheckout: vi.fn().mockImplementation(async (_repo, _tag, _token, destDir) => {
@@ -92,11 +92,11 @@ describe("BuildService", () => {
 
     expect(dockerService.buildImage).not.toHaveBeenCalled();
     expect(postSafeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "build.failed", reason: "no_dockerfile", error: expect.stringContaining("No Dockerfile found") }),
+      expect.objectContaining({ type: "build_failed", reason: "no_dockerfile", error: expect.stringContaining("No Dockerfile found") }),
     );
   });
 
-  it("reports build.failed when the Docker build itself fails", async () => {
+  it("reports build_failed when the Docker build itself fails", async () => {
     const dockerService = { buildImage: vi.fn().mockRejectedValue(new Error("Dockerfile parse error")) };
     const gitService = {
       cloneAndCheckout: vi.fn().mockImplementation(async (_repo, _tag, _token, destDir) => {
@@ -110,7 +110,7 @@ describe("BuildService", () => {
     await service.buildFromRepo(options);
 
     expect(postSafeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "build.failed", reason: "build_failed", error: expect.stringContaining("Dockerfile parse error") }),
+      expect.objectContaining({ type: "build_failed", reason: "build_failed", error: expect.stringContaining("Dockerfile parse error") }),
     );
   });
 
@@ -124,7 +124,7 @@ describe("BuildService", () => {
     expect(gitService.cloneAndCheckout).not.toHaveBeenCalled();
     expect(dockerService.buildImage).not.toHaveBeenCalled();
     expect(postSafeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "build.failed", applicationId: "../../etc", reason: "invalid_application_id", error: "Invalid applicationId" }),
+      expect.objectContaining({ type: "build_failed", applicationId: "../../etc", reason: "invalid_application_id", error: "Invalid applicationId" }),
     );
   });
 });

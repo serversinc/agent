@@ -20,6 +20,7 @@ WORKDIR /app
 RUN apk add --no-cache \
     ca-certificates \
     curl \
+    git \
     iproute2 \
     tini
 
