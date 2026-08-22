@@ -114,8 +114,9 @@ export function createContainerHandlers(dockerService: DockerService) {
   async function remove(ctx: Context) {
     try {
       const id = ctx.req.param("id");
-      await dockerService.removeContainer(id);
-      info("Container", "Removed container", { id });
+      const force = ctx.req.query("force") === "true";
+      await dockerService.removeContainer(id, force);
+      info("Container", "Removed container", { id, force });
       return ctx.json({ success: true, message: "container removed", id });
     } catch (err) {
       return handleError(ctx, err, "Container", "remove container", { id: ctx.req.param("id") });
