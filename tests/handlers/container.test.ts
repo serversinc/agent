@@ -182,7 +182,7 @@ describe("Container Handlers", () => {
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(response.body.id).toBe("abc123");
-      expect(mockDockerService.removeContainer).toHaveBeenCalledWith("abc123");
+      expect(mockDockerService.removeContainer).toHaveBeenCalledWith("abc123", false);
     });
 
     it("should handle remove errors", async () => {
@@ -192,6 +192,16 @@ describe("Container Handlers", () => {
 
       expect(response.status).toBe(500);
       expect(response.body.error).toBe("Container is running");
+      expect(mockDockerService.removeContainer).toHaveBeenCalledWith("abc123", false);
+    });
+
+    it("should force-remove a container when force=true is passed", async () => {
+      mockDockerService.removeContainer.mockResolvedValue(undefined);
+
+      const response = await request(server).delete("/containers/abc123?force=true");
+
+      expect(response.status).toBe(200);
+      expect(mockDockerService.removeContainer).toHaveBeenCalledWith("abc123", true);
     });
   });
 
