@@ -10,6 +10,7 @@ import { createVolumeSchema } from "../validators/Volumes";
 import { runShellSchema, runComposeSchema, execContainerSchema } from "../validators/Shell";
 import { toggleSchema, firewallPortSchema } from "../validators/Security";
 import { installPackageSchema } from "../validators/Packages";
+import { backupDatabaseSchema, backupGlobalsSchema, restoreDatabaseSchema, backupVolumeSchema, restoreVolumeSchema } from "../validators/Backups";
 
 import { info } from "../utils/console";
 import { runWithRequestContext } from "../utils/context";
@@ -23,6 +24,7 @@ import type { createVolumeHandlers } from "../controllers/volumes";
 import type { createShellHandlers } from "../controllers/shell";
 import type { createSecurityHandlers } from "../controllers/security";
 import type { createPackageHandlers } from "../controllers/packages";
+import type { createBackupHandlers } from "../controllers/backups";
 
 type ContainerHandlers = ReturnType<typeof createContainerHandlers>;
 type ImageHandlers = ReturnType<typeof createImageHandlers>;
@@ -31,6 +33,7 @@ type VolumeHandlers = ReturnType<typeof createVolumeHandlers>;
 type ShellHandlers = ReturnType<typeof createShellHandlers>;
 type SecurityHandlers = ReturnType<typeof createSecurityHandlers>;
 type PackageHandlers = ReturnType<typeof createPackageHandlers>;
+type BackupHandlers = ReturnType<typeof createBackupHandlers>;
 
 export function startServer(
   containerHandlers: ContainerHandlers,
@@ -40,6 +43,7 @@ export function startServer(
   shellHandlers: ShellHandlers,
   securityHandlers: SecurityHandlers,
   packageHandlers: PackageHandlers,
+  backupHandlers: BackupHandlers,
   port?: number,
 ) {
   const app = new Hono();
@@ -108,6 +112,13 @@ export function startServer(
 
   // Packages
   app.post("/packages/install", zValidator("json", installPackageSchema), packageHandlers.install);
+
+  // Backups
+  app.post("/backups/database",  zValidator("json", backupDatabaseSchema),  backupHandlers.backupDatabase);
+  app.post("/backups/globals",   zValidator("json", backupGlobalsSchema),   backupHandlers.backupGlobals);
+  app.post("/backups/volume",    zValidator("json", backupVolumeSchema),    backupHandlers.backupVolume);
+  app.post("/restores/database", zValidator("json", restoreDatabaseSchema), backupHandlers.restoreDatabase);
+  app.post("/restores/volume",   zValidator("json", restoreVolumeSchema),   backupHandlers.restoreVolume);
 
   serve(
     {
