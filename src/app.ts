@@ -5,12 +5,14 @@ import { createVolumeHandlers } from "./controllers/volumes";
 import { createShellHandlers } from "./controllers/shell";
 import { createSecurityHandlers } from "./controllers/security";
 import { createPackageHandlers } from "./controllers/packages";
+import { createBackupHandlers } from "./controllers/backups";
 
 import { startServer } from "./services/Server";
 import { DockerService } from "./services/Docker";
 import { BuildService } from "./services/BuildService";
 import { ShellService } from "./services/Shell";
 import { WatcherService } from "./services/Watcher";
+import { BackupService } from "./services/Backup";
 import { heartbeatService } from "./services/HeartbeatService";
 import { metricsService } from "./services/MetricsService";
 import { stateCheckService } from "./services/StateCheckService";
@@ -23,6 +25,7 @@ const dockerService  = new DockerService(config.DOCKER_SOCKET);
 const buildService   = new BuildService(dockerService);
 const shellService   = new ShellService();
 const watcherService = new WatcherService(dockerService);
+const backupService  = new BackupService(dockerService);
 
 watcherService.start();
 heartbeatService.start();
@@ -36,6 +39,7 @@ const volumeHandlers    = createVolumeHandlers(dockerService);
 const shellHandlers     = createShellHandlers(shellService, dockerService);
 const securityHandlers  = createSecurityHandlers(securityService);
 const packageHandlers   = createPackageHandlers(packageService);
+const backupHandlers    = createBackupHandlers(backupService);
 
 startServer(
   containerHandlers,
@@ -45,5 +49,6 @@ startServer(
   shellHandlers,
   securityHandlers,
   packageHandlers,
+  backupHandlers,
   config.PORT,
 );

@@ -1,7 +1,32 @@
 import Docker, { AuthConfigObject } from "dockerode";
+import { createReadStream } from "fs";
+import { PassThrough, Readable, Writable } from "stream";
+import { pipeline } from "stream/promises";
 import { normalizeContainer } from "../utils/transformers";
 import { error, info } from "../utils/console";
 import config from "../config";
+
+export interface ExecCommandStream {
+  stdout: Readable;
+  stderr: Readable;
+  // Resolves to the process exit code. Only meaningful once stdout/stderr have ended —
+  // callers that need the code should drain both streams first.
+  exitCode: () => Promise<number>;
+}
+
+export interface ExecCommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export interface EphemeralContainer {
+  stdin: Writable;
+  stdout: Readable;
+  stderr: Readable;
+  wait: () => Promise<number>;
+  remove: () => Promise<void>;
+}
 
 interface PullImageAuth {
   username: string;
@@ -146,6 +171,214 @@ export class DockerService {
       error(this.name, "Failed to stream container logs", { id, error: (err as Error).message });
       throw err;
     }
+  }
+
+  // Runs `cmd` inside a running container and returns its stdout/stderr as live streams —
+  // nothing is buffered here, which is what lets callers pipe a multi-GB pg_dump/tar
+  // straight through to an upload without holding it in memory.
+  async execCommandStream(containerId: string, cmd: string[], opts: { env?: string[] } = {}): Promise<ExecCommandStream> {
+    const container = this.docker.getContainer(containerId);
+
+    const exec = await container.exec({
+      Cmd: cmd,
+      Env: opts.env,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+    });
+
+    const rawStream = await exec.start({ hijack: true, stdin: false });
+
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    // stderr is drained by hand for diagnostics, so a late error on it must not
+    // crash the process. stdout errors, though, must reach the consumer's
+    // pipeline so a truncated dump fails the backup instead of completing with a
+    // short archive — hence a socket-level error is forwarded onto both streams.
+    stderr.on("error", () => {});
+    rawStream.on("error", err => {
+      stdout.destroy(err as Error);
+      stderr.destroy(err as Error);
+    });
+
+    this.docker.modem.demuxStream(rawStream, stdout, stderr);
+
+    // demuxStream forwards frames but not EOF: once the hijacked socket ends the
+    // PassThroughs must be ended too, or a consumer piping `stdout` to a file
+    // (stageToFile) never sees the readable end and hangs forever.
+    const finished = new Promise<void>(resolve => {
+      const done = (): void => {
+        stdout.end();
+        stderr.end();
+        resolve();
+      };
+      rawStream.once("end", done);
+      rawStream.once("close", done);
+    });
+
+    return {
+      stdout,
+      stderr,
+      exitCode: async () => {
+        await finished;
+        const inspectResult = await exec.inspect();
+        return inspectResult.ExitCode ?? -1;
+      },
+    };
+  }
+
+  // Runs `cmd` inside a running container and buffers stdout/stderr — for short
+  // control-plane commands (createdb, psql probes, pg_restore) where the output
+  // is small but an optional file (inputFile) is streamed in on stdin.
+  async execCommandBuffered(containerId: string, cmd: string[], opts: { env?: string[]; inputFile?: string } = {}): Promise<ExecCommandResult> {
+    const container = this.docker.getContainer(containerId);
+    const hasInput = Boolean(opts.inputFile);
+
+    const exec = await container.exec({
+      Cmd: cmd,
+      Env: opts.env,
+      AttachStdin: hasInput,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+    });
+
+    const rawStream = await exec.start({ hijack: true, stdin: hasInput });
+
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    stdout.on("data", chunk => outChunks.push(chunk as Buffer));
+    stderr.on("data", chunk => errChunks.push(chunk as Buffer));
+    stdout.on("error", () => {});
+    stderr.on("error", () => {});
+
+    this.docker.modem.demuxStream(rawStream, stdout, stderr);
+
+    const finished = new Promise<void>((resolve, reject) => {
+      const done = (): void => {
+        stdout.end();
+        stderr.end();
+        resolve();
+      };
+      rawStream.once("end", done);
+      rawStream.once("close", done);
+      rawStream.once("error", reject);
+    });
+    finished.catch(() => {});
+
+    if (opts.inputFile) {
+      // Writes the payload then closes stdin, which pg_restore reads as EOF.
+      await pipeline(createReadStream(opts.inputFile), rawStream);
+    }
+
+    await finished;
+
+    const inspectResult = await exec.inspect();
+
+    return {
+      stdout: Buffer.concat(outChunks).toString("utf-8"),
+      stderr: Buffer.concat(errChunks).toString("utf-8"),
+      exitCode: inspectResult.ExitCode ?? -1,
+    };
+  }
+
+  // Creates a throwaway container (pulling the image if missing), attaches to its
+  // stdio, and starts it. The caller streams data through stdin/stdout, waits for
+  // the exit code, and must call remove() — on both success and failure.
+  async runEphemeralContainer(opts: { image: string; cmd: string[]; binds: string[]; attachStdin?: boolean }): Promise<EphemeralContainer> {
+    const attachStdin = Boolean(opts.attachStdin);
+
+    if (!(await this.checkImageExists(opts.image))) {
+      await this.pullImage(opts.image);
+    }
+
+    const container = await this.docker.createContainer({
+      Image: opts.image,
+      Cmd: opts.cmd,
+      OpenStdin: attachStdin,
+      StdinOnce: attachStdin,
+      AttachStdin: attachStdin,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+      HostConfig: {
+        Binds: opts.binds,
+        NetworkMode: "none",
+        AutoRemove: false,
+      },
+    });
+
+    const rawStream = await container.attach({
+      stream: true,
+      hijack: true,
+      stdin: attachStdin,
+      stdout: true,
+      stderr: true,
+    });
+
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    stderr.on("error", () => {});
+    rawStream.on("error", err => {
+      stdout.destroy(err as Error);
+      stderr.destroy(err as Error);
+    });
+
+    this.docker.modem.demuxStream(rawStream, stdout, stderr);
+
+    // demuxStream does not forward EOF; end the PassThroughs when the attach
+    // socket closes so a consumer piping `stdout` to a file terminates.
+    const endOutputs = (): void => {
+      stdout.end();
+      stderr.end();
+    };
+    rawStream.once("end", endOutputs);
+    rawStream.once("close", endOutputs);
+
+    await container.start();
+
+    return {
+      stdin: rawStream as unknown as Writable,
+      stdout,
+      stderr,
+      wait: async () => {
+        const result = await container.wait();
+        return result.StatusCode ?? -1;
+      },
+      remove: async () => {
+        try {
+          await container.remove({ force: true });
+        } catch (err) {
+          error(this.name, "Failed to remove ephemeral container", { image: opts.image, error: (err as Error).message });
+        }
+      },
+    };
+  }
+
+  // VOLUMES
+
+  async volumeExists(name: string): Promise<boolean> {
+    try {
+      await this.docker.getVolume(name).inspect();
+      return true;
+    } catch (err) {
+      const dockerErr = err as { statusCode?: number };
+      if (dockerErr.statusCode === 404) {
+        return false;
+      }
+      error(this.name, "Error checking volume existence", { name, error: (err as Error).message });
+      throw err;
+    }
+  }
+
+  async createVolume(name: string): Promise<void> {
+    await this.docker.createVolume({ Name: name });
+  }
+
+  async removeVolume(name: string): Promise<void> {
+    await this.docker.getVolume(name).remove({ force: true });
   }
 
   // IMAGES
