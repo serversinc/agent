@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Pulls ghcr.io/serversinc/agent:latest on a remote server and recreates the
-# running `agent` container with it, preserving its current env, mounts,
-# network, and Traefik labels (read from the existing container, not
-# hardcoded here, so secrets never live in this script or its output).
+# running `agent` container with it, preserving its current env, mounts, and
+# Traefik labels (read from the existing container, not hardcoded here, so
+# secrets never live in this script or its output).
 #
 # Usage: scripts/recreate-agent.sh <ssh-host-alias>
 # Example: scripts/recreate-agent.sh Scarloey
@@ -21,12 +21,15 @@ set -euo pipefail
 echo "==> Pulling latest agent image"
 sudo docker pull ghcr.io/serversinc/agent:latest
 
+# Pinned, not read back: --network takes one value and NetworkMode only
+# reports the primary network.
+NETWORK="traefik"
+
 if sudo docker inspect agent >/dev/null 2>&1; then
   echo "==> Capturing current agent container config"
   mapfile -t ENV_LINES < <(sudo docker inspect agent --format '{{range .Config.Env}}{{println .}}{{end}}' \
     | grep -vE '^(PATH|NODE_VERSION|YARN_VERSION)=')
   mapfile -t MOUNT_LINES < <(sudo docker inspect agent --format '{{range .HostConfig.Binds}}{{println .}}{{end}}')
-  NETWORK=$(sudo docker inspect agent --format '{{.HostConfig.NetworkMode}}')
   RESTART=$(sudo docker inspect agent --format '{{.HostConfig.RestartPolicy.Name}}')
   mapfile -t LABEL_LINES < <(sudo docker inspect agent --format '{{range $k, $v := .Config.Labels}}{{println $k}}{{println $v}}{{end}}' \
     | grep -v '^org.opencontainers')
@@ -64,7 +67,6 @@ else
     "/var/run/docker.sock:/var/run/docker.sock"
     "/home/ubuntu/agent:/agent"
   )
-  NETWORK="traefik"
   RESTART="unless-stopped"
   LABEL_LINES=(
     "traefik.enable" "true"
