@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { zValidator } from "@hono/zod-validator";
 
 import { createContainerSchema, containerLogsQuerySchema } from "../validators/Containers";
+import { createDeploymentSchema } from "../validators/Deployments";
 import { pullImageSchema, createImageSchema } from "../validators/Images";
 import { createNetworkSchema } from "../validators/Networks";
 import { createVolumeSchema } from "../validators/Volumes";
@@ -18,6 +19,7 @@ import config from "../config";
 import { jwtAuthMiddleware } from "../middleware/auth";
 
 import type { createContainerHandlers } from "../controllers/containers";
+import type { createDeploymentHandlers } from "../controllers/deployments";
 import type { createImageHandlers } from "../controllers/images";
 import type { createNetworkHandlers } from "../controllers/networks";
 import type { createVolumeHandlers } from "../controllers/volumes";
@@ -27,6 +29,7 @@ import type { createPackageHandlers } from "../controllers/packages";
 import type { createBackupHandlers } from "../controllers/backups";
 
 type ContainerHandlers = ReturnType<typeof createContainerHandlers>;
+type DeploymentHandlers = ReturnType<typeof createDeploymentHandlers>;
 type ImageHandlers = ReturnType<typeof createImageHandlers>;
 type NetworkHandlers = ReturnType<typeof createNetworkHandlers>;
 type VolumeHandlers = ReturnType<typeof createVolumeHandlers>;
@@ -37,6 +40,7 @@ type BackupHandlers = ReturnType<typeof createBackupHandlers>;
 
 export function startServer(
   containerHandlers: ContainerHandlers,
+  deploymentHandlers: DeploymentHandlers,
   imageHandlers: ImageHandlers,
   networkHandlers: NetworkHandlers,
   volumeHandlers: VolumeHandlers,
@@ -68,6 +72,8 @@ export function startServer(
   app.get("/containers/:id", containerHandlers.get);
   app.post("/containers", zValidator("json", createContainerSchema), containerHandlers.create);
   app.delete("/containers/:id", containerHandlers.remove);
+
+  app.post("/deployments", zValidator("json", createDeploymentSchema), deploymentHandlers.deploy);
 
   // Container actions
   app.post("/containers/:id/start", containerHandlers.start);
