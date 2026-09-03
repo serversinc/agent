@@ -121,7 +121,38 @@ describe("DeployService", () => {
     expect(oneShot.remove).toHaveBeenCalled();
     expect(docker.createContainer).not.toHaveBeenCalled();
     expect(docker.stopContainer).not.toHaveBeenCalled();
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", retired: [], discarded: [] }),
+    );
+  });
+
+  it("a thrown error reports failed with no retired or discarded containers", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const docker = makeDocker({ createContainer: vi.fn().mockRejectedValue(new Error("image pull failed")) });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "image pull failed",
+        retired: [],
+        discarded: [],
+      }),
+    );
+  });
+
+  it("a container that fails to be removed is kept out of the retired list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker({ removeContainer: vi.fn().mockRejectedValue(new Error("remove failed")) });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(docker.removeContainer).toHaveBeenCalledWith("old-container-1", true);
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", retired: [], discarded: [] }),
+    );
   });
 
   it("prestep: a passing pre-step proceeds with the swap", async () => {
