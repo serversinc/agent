@@ -12,6 +12,7 @@ import { runShellSchema, runComposeSchema, execContainerSchema } from "../valida
 import { toggleSchema, firewallPortSchema } from "../validators/Security";
 import { installPackageSchema } from "../validators/Packages";
 import { backupDatabaseSchema, backupGlobalsSchema, restoreDatabaseSchema, backupVolumeSchema, restoreVolumeSchema } from "../validators/Backups";
+import { healthHandler } from "../controllers/health";
 
 import { info } from "../utils/console";
 import { runWithRequestContext } from "../utils/context";
@@ -53,6 +54,9 @@ export function startServer(
   const app = new Hono();
 
   app.use(cors());
+
+  app.get("/health", healthHandler);
+
   app.use("*", jwtAuthMiddleware);
 
   // Request ID middleware — wrap the downstream execution so AsyncLocalStorage context propagates

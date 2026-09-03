@@ -20,7 +20,10 @@ import { metricsService } from "./services/MetricsService";
 import { stateCheckService } from "./services/StateCheckService";
 import { securityService } from "./services/SecurityService";
 import { packageService } from "./services/PackageService";
+import { SelfUpdateService } from "./services/SelfUpdateService";
 
+import { hostname } from "os";
+import { error as logError } from "./utils/console";
 import config from "./config";
 
 const dockerService  = new DockerService(config.DOCKER_SOCKET);
@@ -29,6 +32,9 @@ const shellService   = new ShellService();
 const watcherService = new WatcherService(dockerService);
 const backupService  = new BackupService(dockerService);
 const deployService  = new DeployService(dockerService);
+
+const selfUpdateService = new SelfUpdateService(dockerService, hostname(), config.AGENT_VERSION);
+heartbeatService.setTargetVersionHandler(agent => selfUpdateService.onHeartbeatTarget(agent));
 
 watcherService.start();
 heartbeatService.start();
@@ -57,3 +63,7 @@ startServer(
   backupHandlers,
   config.PORT,
 );
+
+selfUpdateService.checkForTakeoverOnBoot().catch(err => {
+  logError("SelfUpdate", "Boot-time takeover check failed", { error: (err as Error).message });
+});
