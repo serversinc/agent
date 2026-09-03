@@ -59,6 +59,14 @@ export class DeployService {
       info(this.name, line, { deploymentId: options.deploymentId });
     };
 
+    // Containers this run actually removed, so Core can drop their rows even
+    // when the deploy fails: `retired` old containers a `recreate` kills up
+    // front, `discarded` the new container rolled back after a failed health
+    // check. On the happy path `retired` ends up equal to `options.retire`.
+    let retired: string[] = [];
+    const discarded: string[] = [];
+    let newContainerId: string | null = null;
+
     try {
       if (options.prestep?.run) {
         log("Running pre-deploy step");
@@ -66,17 +74,18 @@ export class DeployService {
         if (!prestep.ok) {
           log("Pre-deploy step failed");
 
-          return await this.report(options, "failed", logs, prestep.output || "pre-deploy step exited non-zero");
+          return await this.report(options, "failed", logs, prestep.output || "pre-deploy step exited non-zero", null, retired, discarded);
         }
         log("Pre-deploy step passed");
       }
 
       if (options.strategy === "recreate") {
         await this.retire(options, log);
+        retired = options.retire;
       }
 
       log("Creating new container");
-      const newContainerId = await this.createContainer(options.container, log);
+      newContainerId = await this.createContainer(options.container, log);
 
       const healthy = options.health
         ? await this.waitForHealthy(newContainerId, options.health, log)
@@ -85,25 +94,30 @@ export class DeployService {
       if (!healthy) {
         log("New container did not become healthy — rolling back");
         await this.discard(newContainerId, log);
+        discarded.push(newContainerId);
         const status: DeployStatus = options.strategy === "recreate" ? "failed" : "rolled_back";
 
-        return await this.report(options, status, logs, "new container failed its health check");
+        return await this.report(options, status, logs, "new container failed its health check", null, retired, discarded);
       }
 
       if (options.strategy === "rolling") {
         await this.retire(options, log);
+        retired = options.retire;
       }
 
       log("Deployment completed");
       const container = await this.docker.getContainer(newContainerId);
 
-      return await this.report(options, "completed", logs, null, container, options.retire);
+      return await this.report(options, "completed", logs, null, container, options.retire, discarded);
     } catch (err) {
       const message = (err as Error).message;
       logError(this.name, "Deployment failed", { deploymentId: options.deploymentId, error: message });
       logs.push(`Deployment failed: ${message}`);
 
-      return await this.report(options, "failed", logs, message);
+      // Only `retired` (containers we definitely removed) is reported here.
+      // A new container created before the throw may still be running — its
+      // fate is left to Core's periodic container reconciliation.
+      return await this.report(options, "failed", logs, message, null, retired, discarded);
     }
   }
 
@@ -317,6 +331,7 @@ export class DeployService {
     error: string | null,
     container: unknown = null,
     retired: string[] = [],
+    discarded: string[] = [],
   ): Promise<void> {
     const payload = {
       type: "deployment_status",
@@ -326,6 +341,7 @@ export class DeployService {
       error,
       container,
       retired,
+      discarded,
     };
 
     for (let attempt = 0; attempt <= REPORT_BACKOFF_MS.length; attempt++) {

@@ -54,7 +54,7 @@ describe("DeployService", () => {
     expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 140);
     expect(docker.removeContainer).toHaveBeenCalledWith("old-container-1", true);
     expect(postMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "deployment_status", deploymentId: "dep_1", status: "completed", retired: ["old-container-1"] }),
+      expect.objectContaining({ type: "deployment_status", deploymentId: "dep_1", status: "completed", retired: ["old-container-1"], discarded: [] }),
     );
   });
 
@@ -67,7 +67,14 @@ describe("DeployService", () => {
     expect(docker.stopContainer).toHaveBeenCalledWith("new-container-000000000000", 10);
     expect(docker.removeContainer).toHaveBeenCalledWith("new-container-000000000000", true);
     expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back", error: expect.any(String) }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "rolled_back",
+        error: expect.any(String),
+        retired: [],
+        discarded: ["new-container-000000000000"],
+      }),
+    );
   });
 
   it("recreate: retires the old container before creating the new one", async () => {
@@ -88,7 +95,13 @@ describe("DeployService", () => {
       baseOptions({ strategy: "recreate", health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }),
     );
 
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        retired: ["old-container-1"],
+        discarded: ["new-container-000000000000"],
+      }),
+    );
   });
 
   it("prestep: a non-zero pre-step aborts before any swap and reports failed", async () => {
