@@ -24,6 +24,7 @@ function makeDocker(overrides: Record<string, unknown> = {}) {
     removeContainer: vi.fn().mockResolvedValue(undefined),
     renameContainer: vi.fn().mockResolvedValue(undefined),
     listContainersByLabel: vi.fn().mockResolvedValue([]),
+    listContainers: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -127,6 +128,21 @@ describe("SelfUpdateService", () => {
       expect(postSafeMock).toHaveBeenCalledWith(expect.objectContaining({ type: "agent_update_started" }));
     });
 
+    it("strips AGENT_VERSION from the copied env so the new image's baked value wins", async () => {
+      const docker = makeDocker({
+        getContainer: vi.fn().mockResolvedValue({
+          Name: "/agent",
+          Config: { Labels: {}, Env: ["A=1", "AGENT_VERSION=1.0.0", "B=2"], ExposedPorts: {} },
+          HostConfig: {},
+        }),
+      });
+      const service = makeService(docker);
+
+      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+
+      expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({ Env: ["A=1", "B=2"] }));
+    });
+
     it("pulls the target image only if not already present", async () => {
       const docker = makeDocker({ checkImageExists: vi.fn().mockResolvedValue(false) });
       const service = makeService(docker);
@@ -187,11 +203,15 @@ describe("SelfUpdateService", () => {
       expect(docker.renameContainer).not.toHaveBeenCalled();
     });
 
-    it("reports a failure and does not clean itself up when retiring the predecessor fails after a passed self-check", async () => {
+    it("reports a failure and rolls itself back when retiring the predecessor fails after a passed self-check", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
       const docker = makeDocker({
         listContainersByLabel: vi.fn().mockResolvedValue([{ Id: "predecessor-container-id" }]),
-        removeContainer: vi.fn().mockRejectedValue(new Error("no such container")),
+        removeContainer: vi.fn().mockImplementation(async (id: string) => {
+          if (id === "predecessor-container-id") {
+            throw new Error("no such container");
+          }
+        }),
       });
       const service = makeService(docker);
 
@@ -199,8 +219,37 @@ describe("SelfUpdateService", () => {
 
       expect(docker.renameContainer).not.toHaveBeenCalled();
       expect(docker.removeContainer).toHaveBeenCalledWith("predecessor-container-id", true);
-      expect(docker.removeContainer).not.toHaveBeenCalledWith("self-container-id", true);
+      expect(docker.removeContainer).toHaveBeenCalledWith("self-container-id", true);
       expect(postSafeMock).toHaveBeenCalledWith(expect.objectContaining({ type: "agent_update_failed" }));
+    });
+
+    it("finds an unlabelled predecessor by its canonical container name", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+      const docker = makeDocker({
+        listContainersByLabel: vi.fn().mockResolvedValue([]),
+        listContainers: vi.fn().mockResolvedValue([{ id: "legacy-agent-id", name: "/agent" }]),
+      });
+      const service = makeService(docker);
+
+      await service.checkForTakeoverOnBoot();
+
+      expect(docker.stopContainer).toHaveBeenCalledWith("legacy-agent-id", SelfUpdateService.STOP_GRACE_SECONDS);
+      expect(docker.removeContainer).toHaveBeenCalledWith("legacy-agent-id", true);
+      expect(docker.renameContainer).toHaveBeenCalledWith("self-container-id", SelfUpdateService.CANONICAL_NAME);
+    });
+
+    it("does not treat itself as the predecessor when it already holds the canonical name", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+      const docker = makeDocker({
+        listContainersByLabel: vi.fn().mockResolvedValue([]),
+        listContainers: vi.fn().mockResolvedValue([{ id: "self-container-id", name: "/agent" }]),
+      });
+      const service = makeService(docker);
+
+      await service.checkForTakeoverOnBoot();
+
+      expect(docker.stopContainer).not.toHaveBeenCalled();
+      expect(docker.renameContainer).not.toHaveBeenCalled();
     });
 
     it("ignores itself when it appears in the labeled list", async () => {
