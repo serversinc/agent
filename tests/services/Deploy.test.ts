@@ -54,8 +54,26 @@ describe("DeployService", () => {
     expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 140);
     expect(docker.removeContainer).toHaveBeenCalledWith("old-container-1", true);
     expect(postMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "deployment_status", deploymentId: "dep_1", status: "completed", retired: ["old-container-1"] }),
+      expect.objectContaining({ type: "deployment_status", deploymentId: "dep_1", status: "completed", retired: ["old-container-1"], discarded: [] }),
     );
+  });
+
+  it("uses stopGraceSeconds to override the default stop grace when retiring", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker();
+
+    await new DeployService(docker as never).deploy(baseOptions({ stopGraceSeconds: 15 }));
+
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 15);
+  });
+
+  it("honours an explicit stopGraceSeconds of 0 (kill with no grace)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker();
+
+    await new DeployService(docker as never).deploy(baseOptions({ stopGraceSeconds: 0 }));
+
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 0);
   });
 
   it("rolling: an unhealthy new container is discarded, the old one is left running, reports rolled_back", async () => {
@@ -67,20 +85,32 @@ describe("DeployService", () => {
     expect(docker.stopContainer).toHaveBeenCalledWith("new-container-000000000000", 10);
     expect(docker.removeContainer).toHaveBeenCalledWith("new-container-000000000000", true);
     expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back", error: expect.any(String) }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "rolled_back",
+        error: expect.any(String),
+        retired: [],
+        discarded: ["new-container-000000000000"],
+      }),
+    );
   });
 
-  it("recreate: retires the old container before creating the new one", async () => {
+  it("recreate: stops the old container before creating the new one, removes it only once healthy", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const docker = makeDocker();
 
     await new DeployService(docker as never).deploy(baseOptions({ strategy: "recreate" }));
 
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 140);
     expect(docker.stopContainer.mock.invocationCallOrder[0]).toBeLessThan(docker.createContainer.mock.invocationCallOrder[0]);
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+    expect(docker.removeContainer).toHaveBeenCalledWith("old-container-1", true);
+    expect(docker.removeContainer.mock.invocationCallOrder[0]).toBeGreaterThan(docker.createContainer.mock.invocationCallOrder[0]);
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", retired: ["old-container-1"], discarded: [] }),
+    );
   });
 
-  it("recreate: a failed health check reports failed (no rollback target)", async () => {
+  it("recreate: a failed health check restores the old container and reports rolled_back", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
     const docker = makeDocker();
 
@@ -88,7 +118,51 @@ describe("DeployService", () => {
       baseOptions({ strategy: "recreate", health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }),
     );
 
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(docker.removeContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
+    expect(docker.startContainer).toHaveBeenCalledWith("old-container-1");
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "rolled_back",
+        retired: [],
+        discarded: ["new-container-000000000000"],
+      }),
+    );
+  });
+
+  it("recreate: a failed health check reports failed when the old container cannot be restored", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const docker = makeDocker({
+      startContainer: vi.fn().mockImplementation((id: string) => {
+        if (id === "old-container-1") {
+          return Promise.reject(new Error("no such container"));
+        }
+
+        return Promise.resolve(undefined);
+      }),
+    });
+
+    await new DeployService(docker as never).deploy(
+      baseOptions({ strategy: "recreate", health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }),
+    );
+
+    expect(docker.startContainer).toHaveBeenCalledWith("old-container-1");
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", retired: [], discarded: ["new-container-000000000000"] }),
+    );
+  });
+
+  it("recreate: a throw after the old container is stopped restarts it", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const docker = makeDocker({ createContainer: vi.fn().mockRejectedValue(new Error("image pull failed")) });
+
+    await new DeployService(docker as never).deploy(baseOptions({ strategy: "recreate" }));
+
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 140);
+    expect(docker.startContainer).toHaveBeenCalledWith("old-container-1");
+    expect(docker.removeContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", error: "image pull failed", retired: [], discarded: [] }),
+    );
   });
 
   it("prestep: a non-zero pre-step aborts before any swap and reports failed", async () => {
@@ -108,7 +182,38 @@ describe("DeployService", () => {
     expect(oneShot.remove).toHaveBeenCalled();
     expect(docker.createContainer).not.toHaveBeenCalled();
     expect(docker.stopContainer).not.toHaveBeenCalled();
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", retired: [], discarded: [] }),
+    );
+  });
+
+  it("a thrown error reports failed with no retired or discarded containers", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const docker = makeDocker({ createContainer: vi.fn().mockRejectedValue(new Error("image pull failed")) });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: "image pull failed",
+        retired: [],
+        discarded: [],
+      }),
+    );
+  });
+
+  it("a container that fails to be removed is kept out of the retired list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker({ removeContainer: vi.fn().mockRejectedValue(new Error("remove failed")) });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(docker.removeContainer).toHaveBeenCalledWith("old-container-1", true);
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", retired: [], discarded: [] }),
+    );
   });
 
   it("prestep: a passing pre-step proceeds with the swap", async () => {

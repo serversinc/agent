@@ -54,6 +54,23 @@ describe("Deployment Handlers", () => {
     );
   });
 
+  it("passes an optional stop_grace_seconds through as stopGraceSeconds", async () => {
+    await request(server)
+      .post("/deployments")
+      .send({ ...payload, stop_grace_seconds: 15 });
+
+    expect(mockDeployService.deploy).toHaveBeenCalledWith(expect.objectContaining({ stopGraceSeconds: 15 }));
+  });
+
+  it("rejects a stop_grace_seconds above the 600s ceiling", async () => {
+    const response = await request(server)
+      .post("/deployments")
+      .send({ ...payload, stop_grace_seconds: 601 });
+
+    expect(response.status).toBe(400);
+    expect(mockDeployService.deploy).not.toHaveBeenCalled();
+  });
+
   it("defaults strategy to rolling and retire to an empty list", async () => {
     await request(server)
       .post("/deployments")
