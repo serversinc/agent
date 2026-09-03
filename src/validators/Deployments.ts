@@ -19,7 +19,7 @@ export const createDeploymentSchema = z.object({
     })
     .optional(),
   retire: z.array(z.string()).default([]),
-  retire_stop_grace_s: z.number().int().nonnegative().max(600).optional(),
+  stop_grace_seconds: z.number().int().nonnegative().max(600).optional(),
   prestep: z
     .object({
       run: z.boolean().default(false),

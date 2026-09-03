@@ -3,7 +3,7 @@ import { DockerService } from "./Docker";
 import { demultiplexDockerStream, stripAnsiCodes } from "../utils/transformers";
 import { info, warn, error as logError } from "../utils/console";
 
-const RETIRE_STOP_GRACE_SECONDS = 140;
+const DEFAULT_STOP_GRACE_SECONDS = 140;
 const RUNNING_GRACE_MS = 3000;
 const REPORT_BACKOFF_MS = [1000, 2000, 4000, 8000];
 
@@ -37,7 +37,7 @@ export interface DeployOptions {
   container: DeployContainerOptions;
   health?: DeployHealthCheck;
   retire: string[];
-  retireStopGraceSeconds?: number;
+  stopGraceSeconds?: number;
   prestep?: { run: boolean; command: string[] };
 }
 
@@ -274,7 +274,7 @@ export class DeployService {
   }
 
   private async stopRetired(options: DeployOptions, log: (line: string) => void): Promise<void> {
-    const grace = options.retireStopGraceSeconds ?? RETIRE_STOP_GRACE_SECONDS;
+    const grace = options.stopGraceSeconds ?? DEFAULT_STOP_GRACE_SECONDS;
 
     for (const id of options.retire) {
       log(`Stopping old container ${id.slice(0, 12)}`);

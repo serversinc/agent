@@ -58,6 +58,24 @@ describe("DeployService", () => {
     );
   });
 
+  it("uses stopGraceSeconds to override the default stop grace when retiring", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker();
+
+    await new DeployService(docker as never).deploy(baseOptions({ stopGraceSeconds: 15 }));
+
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 15);
+  });
+
+  it("honours an explicit stopGraceSeconds of 0 (kill with no grace)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker();
+
+    await new DeployService(docker as never).deploy(baseOptions({ stopGraceSeconds: 0 }));
+
+    expect(docker.stopContainer).toHaveBeenCalledWith("old-container-1", 0);
+  });
+
   it("rolling: an unhealthy new container is discarded, the old one is left running, reports rolled_back", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
     const docker = makeDocker();
