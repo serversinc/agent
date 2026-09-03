@@ -337,6 +337,8 @@ export class DeployService {
 
       return true;
     } catch (err) {
+      // Returning false here: the new container may still be holding the fixed
+      // host port, so a recreate's restoreRetired() can fail to rebind it.
       warn(this.name, "Failed to remove new container during rollback", { id, error: (err as Error).message });
 
       return false;
