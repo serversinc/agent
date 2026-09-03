@@ -343,9 +343,12 @@ export class BackupService {
   }
 
   private async databaseExists(container: string, database: string, user: string, env: string[]): Promise<boolean> {
+    // psql does not expand `:'var'` inside a -c string, so the name is embedded
+    // as a quoted SQL literal (single quotes doubled) rather than a variable.
+    const literal = `'${database.replace(/'/g, "''")}'`;
     const res = await this.dockerService.execCommandBuffered(
       container,
-      ["psql", "-U", user, "-h", "127.0.0.1", "-tAc", "SELECT 1 FROM pg_database WHERE datname = :'db'", "-v", `db=${database}`],
+      ["psql", "-U", user, "-h", "127.0.0.1", "-tAc", `SELECT 1 FROM pg_database WHERE datname = ${literal}`],
       { env },
     );
 
