@@ -15,6 +15,7 @@ export class SelfUpdateService {
   static readonly ROLE_LABEL = "com.serversinc.role";
   static readonly ROLE_VALUE = "agent";
   static readonly CANONICAL_NAME = "agent";
+  static readonly IMAGE_PROVIDED_ENV = ["AGENT_VERSION"];
   static readonly DEBOUNCE_THRESHOLD = 3;
   static readonly MAX_JITTER_MS = 15 * 60 * 1000;
   static readonly HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
@@ -88,7 +89,7 @@ export class SelfUpdateService {
     const created = await this.docker.createContainer({
       name: tempName,
       Image: target.image,
-      Env: inspect.Config?.Env,
+      Env: this.stripImageProvidedEnv(inspect.Config?.Env),
       Labels: labels,
       ExposedPorts: inspect.Config?.ExposedPorts,
       HostConfig: inspect.HostConfig,
@@ -165,6 +166,8 @@ export class SelfUpdateService {
     } catch (err) {
       logError(this.name, "Passed self-check but failed while retiring the predecessor", { error: (err as Error).message });
       await this.reportUpdate("agent_update_failed", { reason: "failed to retire predecessor or rename after a successful self-check" });
+      this.resetDebounce();
+      await this.cleanupSelf();
 
       return;
     }
@@ -175,8 +178,31 @@ export class SelfUpdateService {
 
   private async findPredecessor(): Promise<{ Id: string } | null> {
     const siblings = await this.docker.listContainersByLabel(SelfUpdateService.ROLE_LABEL, SelfUpdateService.ROLE_VALUE);
+    const labeled = siblings.find(sibling => !this.isSelf(sibling.Id));
 
-    return siblings.find(sibling => !this.isSelf(sibling.Id)) ?? null;
+    if (labeled) {
+      return { Id: labeled.Id };
+    }
+
+    const all = await this.docker.listContainers();
+    const named = all.find(
+      container => container.name?.replace(/^\//, "") === SelfUpdateService.CANONICAL_NAME && !this.isSelf(container.id),
+    );
+
+    return named ? { Id: named.id } : null;
+  }
+
+  private stripImageProvidedEnv(env: string[] | undefined): string[] | undefined {
+    if (!env) {
+      return env;
+    }
+
+    return env.filter(entry => {
+      const eq = entry.indexOf("=");
+      const key = eq === -1 ? entry : entry.slice(0, eq);
+
+      return !SelfUpdateService.IMAGE_PROVIDED_ENV.includes(key);
+    });
   }
 
   private isSelf(id: string): boolean {
