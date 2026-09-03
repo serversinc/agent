@@ -16,6 +16,11 @@ RUN npm run build
 FROM node:24-alpine
 WORKDIR /app
 
+# Stamped by CI from package.json version (see docker-publish.yml) so a
+# running container can report its own version in heartbeats.
+ARG AGENT_VERSION=dev
+ENV AGENT_VERSION=${AGENT_VERSION}
+
 # Install runtime dependencies (Alpine uses apk)
 RUN apk add --no-cache \
     ca-certificates \

@@ -77,6 +77,25 @@ export class DockerService {
     }
   }
 
+  async listContainersByLabel(label: string, value: string): Promise<Docker.ContainerInfo[]> {
+    try {
+      return await this.docker.listContainers({ all: true, filters: { label: [`${label}=${value}`] } });
+    } catch (err) {
+      error(this.name, "Failed to list containers by label", { label, value, error: (err as Error).message });
+      throw err;
+    }
+  }
+
+  async renameContainer(id: string, name: string): Promise<void> {
+    try {
+      const container = this.docker.getContainer(id);
+      await container.rename({ name });
+    } catch (err) {
+      error(this.name, "Failed to rename container", { id, name, error: (err as Error).message });
+      throw err;
+    }
+  }
+
   async createContainer(options: Docker.ContainerCreateOptions): Promise<Docker.Container> {
     try {
       return await this.docker.createContainer(options);
@@ -195,7 +214,7 @@ export class DockerService {
     // crash the process. stdout errors, though, must reach the consumer's
     // pipeline so a truncated dump fails the backup instead of completing with a
     // short archive — hence a socket-level error is forwarded onto both streams.
-    stderr.on("error", () => {});
+    stderr.on("error", () => { });
     rawStream.on("error", err => {
       stdout.destroy(err as Error);
       stderr.destroy(err as Error);
@@ -251,8 +270,8 @@ export class DockerService {
     const errChunks: Buffer[] = [];
     stdout.on("data", chunk => outChunks.push(chunk as Buffer));
     stderr.on("data", chunk => errChunks.push(chunk as Buffer));
-    stdout.on("error", () => {});
-    stderr.on("error", () => {});
+    stdout.on("error", () => { });
+    stderr.on("error", () => { });
 
     this.docker.modem.demuxStream(rawStream, stdout, stderr);
 
@@ -266,7 +285,7 @@ export class DockerService {
       rawStream.once("close", done);
       rawStream.once("error", reject);
     });
-    finished.catch(() => {});
+    finished.catch(() => { });
 
     if (opts.inputFile) {
       // Writes the payload then closes stdin, which pg_restore reads as EOF.
@@ -320,7 +339,7 @@ export class DockerService {
 
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    stderr.on("error", () => {});
+    stderr.on("error", () => { });
     rawStream.on("error", err => {
       stdout.destroy(err as Error);
       stderr.destroy(err as Error);

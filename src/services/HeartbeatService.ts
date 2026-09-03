@@ -2,9 +2,20 @@ import { info, warn } from "../utils/console";
 import { httpService } from "./Http";
 import config from "../config";
 
+export interface HeartbeatAgentUpdate {
+  target_version?: string;
+  target_image?: string;
+  min_version?: string;
+}
+
+interface HeartbeatResponse {
+  agent?: HeartbeatAgentUpdate;
+}
+
 export class HeartbeatService {
   private readonly name = "Heartbeat";
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private targetVersionHandler: ((agent: HeartbeatAgentUpdate) => void) | null = null;
 
   start(): void {
     if (this.intervalId) {
@@ -30,12 +41,20 @@ export class HeartbeatService {
     }
   }
 
-  private send(): void {
-    httpService.postSafe({ type: "alive" }).then(success => {
-      if (!success) {
-        warn(this.name, "Failed to send heartbeat");
+  setTargetVersionHandler(handler: (agent: HeartbeatAgentUpdate) => void): void {
+    this.targetVersionHandler = handler;
+  }
+
+  private async send(): Promise<void> {
+    try {
+      const response = await httpService.post<HeartbeatResponse>({ type: "alive" });
+
+      if (response?.agent && this.targetVersionHandler) {
+        this.targetVersionHandler(response.agent);
       }
-    });
+    } catch {
+      warn(this.name, "Failed to send heartbeat");
+    }
   }
 }
 

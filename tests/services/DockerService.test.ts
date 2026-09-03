@@ -94,4 +94,37 @@ describe("DockerService", () => {
       await expect(service.pullImage("nginx:latest")).rejects.toThrow("connection reset");
     });
   });
+
+  describe("listContainersByLabel", () => {
+    it("filters containers by a label=value pair", async () => {
+      (service.docker as any).listContainers = vi.fn().mockResolvedValue([{ Id: "abc123" }]);
+
+      const result = await service.listContainersByLabel("com.serversinc.role", "agent");
+
+      expect((service.docker as any).listContainers).toHaveBeenCalledWith({
+        all: true,
+        filters: { label: ["com.serversinc.role=agent"] },
+      });
+      expect(result).toEqual([{ Id: "abc123" }]);
+    });
+  });
+
+  describe("renameContainer", () => {
+    it("renames the given container", async () => {
+      const rename = vi.fn().mockResolvedValue(undefined);
+      (service.docker as any).getContainer = vi.fn().mockReturnValue({ rename });
+
+      await service.renameContainer("abc123", "agent");
+
+      expect((service.docker as any).getContainer).toHaveBeenCalledWith("abc123");
+      expect(rename).toHaveBeenCalledWith({ name: "agent" });
+    });
+
+    it("propagates a rename failure", async () => {
+      const rename = vi.fn().mockRejectedValue(new Error("name already in use"));
+      (service.docker as any).getContainer = vi.fn().mockReturnValue({ rename });
+
+      await expect(service.renameContainer("abc123", "agent")).rejects.toThrow("name already in use");
+    });
+  });
 });
