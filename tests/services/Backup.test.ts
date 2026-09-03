@@ -311,6 +311,23 @@ describe("BackupService", () => {
       expect(leftoverTempFiles(restoreDbOptions.restoreId)).toEqual([]);
     });
 
+    it("probes for an existing database with a quoted SQL literal, not a psql variable", async () => {
+      const docker = makeDocker({
+        execCommandBuffered: vi
+          .fn()
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 })
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 })
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }),
+      });
+
+      await new BackupService(docker as any).restoreDatabase(restoreDbOptions);
+
+      const probeArgv = docker.execCommandBuffered.mock.calls[0][1] as string[];
+      expect(probeArgv).not.toContain("-v");
+      expect(probeArgv.join(" ")).not.toContain(":'db'");
+      expect(probeArgv[probeArgv.length - 1]).toBe("SELECT 1 FROM pg_database WHERE datname = 'app_db_copy'");
+    });
+
     it("aborts with a collision before downloading when the target database already exists", async () => {
       const docker = makeDocker({
         execCommandBuffered: vi.fn().mockResolvedValue({ stdout: "1", stderr: "", exitCode: 0 }),
