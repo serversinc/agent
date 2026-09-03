@@ -66,6 +66,11 @@ export class DeployService {
     let retired: string[] = [];
     const discarded: string[] = [];
 
+    // `recreate` stops the retire set up front to free its ports/volumes, then
+    // removes it only once the new container is healthy. Until then the old
+    // containers are a stopped standby we can start again if the deploy fails.
+    let oldStopped = false;
+
     try {
       if (options.prestep?.run) {
         log("Running pre-deploy step");
@@ -79,7 +84,8 @@ export class DeployService {
       }
 
       if (options.strategy === "recreate") {
-        retired = await this.retire(options, log);
+        await this.stopRetired(options, log);
+        oldStopped = true;
       }
 
       log("Creating new container");
@@ -94,9 +100,23 @@ export class DeployService {
         if (await this.discard(newContainerId, log)) {
           discarded.push(newContainerId);
         }
-        const status: DeployStatus = options.strategy === "recreate" ? "failed" : "rolled_back";
 
-        return await this.report(options, status, logs, "new container failed its health check", null, retired, discarded);
+        if (options.strategy === "recreate") {
+          const restored = await this.restoreRetired(options, log);
+          const status: DeployStatus = restored ? "rolled_back" : "failed";
+          const reason = restored
+            ? "new container failed its health check; previous container restored"
+            : "new container failed its health check; previous container could not be restored";
+
+          return await this.report(options, status, logs, reason, null, retired, discarded);
+        }
+
+        return await this.report(options, "rolled_back", logs, "new container failed its health check", null, retired, discarded);
+      }
+
+      if (options.strategy === "recreate") {
+        retired = await this.removeRetired(options, log);
+        oldStopped = false;
       }
 
       if (options.strategy === "rolling") {
@@ -111,6 +131,12 @@ export class DeployService {
       const message = (err as Error).message;
       logError(this.name, "Deployment failed", { deploymentId: options.deploymentId, error: message });
       logs.push(`Deployment failed: ${message}`);
+
+      // A `recreate` that threw after stopping the old containers but before
+      // removing them: start them again so the app isn't left with nothing.
+      if (oldStopped) {
+        await this.restoreRetired(options, log);
+      }
 
       // Only `retired` (containers we definitely removed) is reported here.
       // A new container created before the throw may still be running — its
@@ -242,17 +268,30 @@ export class DeployService {
   }
 
   private async retire(options: DeployOptions, log: (line: string) => void): Promise<string[]> {
+    await this.stopRetired(options, log);
+
+    return this.removeRetired(options, log);
+  }
+
+  private async stopRetired(options: DeployOptions, log: (line: string) => void): Promise<void> {
     const grace = options.retireStopGraceSeconds ?? RETIRE_STOP_GRACE_SECONDS;
-    const removed: string[] = [];
 
     for (const id of options.retire) {
-      log(`Retiring old container ${id.slice(0, 12)}`);
+      log(`Stopping old container ${id.slice(0, 12)}`);
 
       try {
         await this.docker.stopContainer(id, grace);
       } catch (err) {
         warn(this.name, "Failed to stop old container", { id, error: (err as Error).message });
       }
+    }
+  }
+
+  private async removeRetired(options: DeployOptions, log: (line: string) => void): Promise<string[]> {
+    const removed: string[] = [];
+
+    for (const id of options.retire) {
+      log(`Removing old container ${id.slice(0, 12)}`);
 
       try {
         await this.docker.removeContainer(id, true);
@@ -263,6 +302,25 @@ export class DeployService {
     }
 
     return removed;
+  }
+
+  // Bring the retire set back after a failed `recreate` — they were only
+  // stopped, never removed. Returns true if every one is running again.
+  private async restoreRetired(options: DeployOptions, log: (line: string) => void): Promise<boolean> {
+    let allRunning = true;
+
+    for (const id of options.retire) {
+      log(`Restoring old container ${id.slice(0, 12)}`);
+
+      try {
+        await this.docker.startContainer(id);
+      } catch (err) {
+        allRunning = false;
+        warn(this.name, "Failed to restore old container during rollback", { id, error: (err as Error).message });
+      }
+    }
+
+    return allRunning;
   }
 
   private async discard(id: string, log: (line: string) => void): Promise<boolean> {
