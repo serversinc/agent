@@ -6,6 +6,20 @@ import { httpService } from "./Http";
 import { error, info } from "../utils/console";
 import { assertDiskSpace, downloadFile, fileSize, hashFile, stageToFile, uploadFile, withTempFile } from "../utils/storage";
 
+// Which dump/restore toolchain to drive. Absent or "postgres" preserves the
+// historical pg_dump/pg_restore path; "mysql" and "mariadb" share the
+// mysqldump/mysql client and are treated identically.
+export type DatabaseEngine = "postgres" | "mysql" | "mariadb";
+
+function isMysqlEngine(engine?: DatabaseEngine): boolean {
+  return engine === "mysql" || engine === "mariadb";
+}
+
+// Core validates logical database names before dispatch; re-checked here so a
+// malformed name can never reach an interpolated SQL statement or be read as a
+// leading-dash option by mysqldump/mysql.
+const VALID_DATABASE_NAME = /^[A-Za-z0-9_]+$/;
+
 export interface BackupDatabaseOptions {
   backupId: string;
   container: string;
@@ -13,6 +27,7 @@ export interface BackupDatabaseOptions {
   presignedUrl: string;
   adminUser: string;
   adminPassword: string;
+  engine?: DatabaseEngine;
 }
 
 export interface BackupGlobalsOptions {
@@ -30,6 +45,7 @@ export interface RestoreDatabaseOptions {
   presignedUrl: string;
   adminUser: string;
   adminPassword: string;
+  engine?: DatabaseEngine;
 }
 
 export interface BackupVolumeOptions {
@@ -60,7 +76,34 @@ export class BackupService {
   // local temp file, uploads it to the pre-signed URL, then reports the outcome
   // to CORE_URL. Never throws — failures are a `backup_failed` event instead.
   async backupDatabase(options: BackupDatabaseOptions): Promise<void> {
-    const { backupId, container, database, presignedUrl, adminUser, adminPassword } = options;
+    const { backupId, container, database, presignedUrl, adminUser, adminPassword, engine } = options;
+
+    if (isMysqlEngine(engine)) {
+      if (!VALID_DATABASE_NAME.test(database)) {
+        return this.failBackup(backupId, "exec_failed", "database name must match ^[A-Za-z0-9_]+$");
+      }
+
+      // The password goes in MYSQL_PWD (the mysqldump equivalent of PGPASSWORD)
+      // so it never lands on the container's process argv. -h 127.0.0.1 forces a
+      // TCP + password auth rather than a local-socket root connection.
+      // --set-gtid-purged=OFF keeps a GTID-enabled source from emitting a
+      // SET @@GLOBAL.GTID_PURGED the fresh target would reject.
+      await this.streamDump({
+        backupId,
+        container,
+        presignedUrl,
+        cmd: [
+          "mysqldump", "-u", adminUser, "-h", "127.0.0.1",
+          "--single-transaction", "--routines", "--triggers", "--events", "--set-gtid-purged=OFF",
+          database,
+        ],
+        env: [`MYSQL_PWD=${adminPassword}`],
+        tmpName: `backup-${backupId}.sql`,
+        logLabel: "Database backup completed",
+        logMeta: { backupId, container, database, engine },
+      });
+      return;
+    }
 
     // -h 127.0.0.1 forces a TCP + password connection so pg_dump authenticates as
     // the admin role rather than falling back to (failing) peer auth as root.
@@ -72,7 +115,7 @@ export class BackupService {
       env: [`PGPASSWORD=${adminPassword}`],
       tmpName: `backup-${backupId}.dump`,
       logLabel: "Database backup completed",
-      logMeta: { backupId, container, database },
+      logMeta: { backupId, container, database, engine: engine ?? "postgres" },
     });
   }
 
@@ -80,6 +123,10 @@ export class BackupService {
   // tablespaces) via `pg_dumpall --globals-only` — the parts a per-database
   // pg_dump does not capture — as plain SQL, and uploads it. Same event contract
   // as backupDatabase.
+  //
+  // Postgres only: MySQL/MariaDB have no globals dump — grants there are
+  // per-object and captured by the per-database mysqldump — so v1 has no MySQL
+  // branch here.
   async backupGlobals(options: BackupGlobalsOptions): Promise<void> {
     const { backupId, container, presignedUrl, adminUser, adminPassword } = options;
 
@@ -91,13 +138,13 @@ export class BackupService {
       env: [`PGPASSWORD=${adminPassword}`],
       tmpName: `backup-${backupId}.sql`,
       logLabel: "Globals backup completed",
-      logMeta: { backupId, container },
+      logMeta: { backupId, container, engine: "postgres" },
     });
   }
 
-  // Shared pipeline for the pg_dump / pg_dumpall backup routes: exec the dump,
-  // stream it straight to a temp file, checksum it, upload it, emit the terminal
-  // event. Temp file is always cleaned up.
+  // Shared pipeline for the logical-dump backup routes (pg_dump, pg_dumpall,
+  // mysqldump): exec the dump, stream it straight to a temp file, checksum it,
+  // upload it, emit the terminal event. Temp file is always cleaned up.
   private async streamDump(params: {
     backupId: string;
     container: string;
@@ -159,15 +206,33 @@ export class BackupService {
 
   // Restores a database archive onto a target container under `database`. Aborts
   // before writing anything if that name already exists (collision). Never throws.
+  // Dispatches on `engine`: absent/"postgres" -> pg_restore, "mysql"/"mariadb" ->
+  // the mysql client.
   async restoreDatabase(options: RestoreDatabaseOptions): Promise<void> {
+    if (isMysqlEngine(options.engine)) {
+      return this.restoreMysqlDatabase(options);
+    }
+    return this.restorePostgresDatabase(options);
+  }
+
+  private async restorePostgresDatabase(options: RestoreDatabaseOptions): Promise<void> {
     const { restoreId, container, database, presignedUrl, adminUser, adminPassword } = options;
     const env = [`PGPASSWORD=${adminPassword}`];
+
+    // A terminal event is sent from exactly one place; `settled` stops the outer
+    // catch from emitting a second restore_failed after an inner branch already
+    // reported the outcome.
+    let settled = false;
+    const fail = (stage: RestoreStage, reason: string): Promise<void> => {
+      settled = true;
+      return this.failRestore(restoreId, stage, reason);
+    };
 
     try {
       try {
         await assertDiskSpace();
       } catch (err) {
-        return this.failRestore(restoreId, "disk_precheck_failed", (err as Error).message);
+        return fail("disk_precheck_failed", (err as Error).message);
       }
 
       // Collision check first — never touch an existing database.
@@ -175,22 +240,22 @@ export class BackupService {
       try {
         exists = await this.databaseExists(container, database, adminUser, env);
       } catch (err) {
-        return this.failRestore(restoreId, "restore_failed", (err as Error).message);
+        return fail("restore_failed", (err as Error).message);
       }
       if (exists) {
-        return this.failRestore(restoreId, "collision", `database "${database}" already exists on the target`);
+        return fail("collision", `database "${database}" already exists on the target`);
       }
 
       await withTempFile(`restore-${restoreId}.dump`, async path => {
         try {
           await downloadFile(presignedUrl, path);
         } catch (err) {
-          return this.failRestore(restoreId, "download_failed", (err as Error).message);
+          return fail("download_failed", (err as Error).message);
         }
 
         const create = await this.dockerService.execCommandBuffered(container, ["createdb", "-U", adminUser, "-h", "127.0.0.1", database], { env });
         if (create.exitCode !== 0) {
-          return this.failRestore(restoreId, "restore_failed", create.stderr.trim() || `createdb exited with code ${create.exitCode}`);
+          return fail("restore_failed", create.stderr.trim() || `createdb exited with code ${create.exitCode}`);
         }
 
         const restore = await this.dockerService.execCommandBuffered(
@@ -199,14 +264,88 @@ export class BackupService {
           { env, inputFile: path },
         );
         if (restore.exitCode !== 0) {
-          return this.failRestore(restoreId, "restore_failed", restore.stderr.trim() || `pg_restore exited with code ${restore.exitCode}`);
+          return fail("restore_failed", restore.stderr.trim() || `pg_restore exited with code ${restore.exitCode}`);
         }
 
-        info(this.name, "Database restore completed", { restoreId, container, database });
+        settled = true;
+        info(this.name, "Database restore completed", { restoreId, container, database, engine: options.engine ?? "postgres" });
         await httpService.postSafe({ type: "restore_completed", restoreId });
       });
     } catch (err) {
-      await this.failRestore(restoreId, "restore_failed", (err as Error).message);
+      if (!settled) await this.failRestore(restoreId, "restore_failed", (err as Error).message);
+    }
+  }
+
+  // MySQL/MariaDB restore: probe information_schema for a name collision, create
+  // the target schema, then feed the plain-SQL dump into the mysql client on
+  // stdin. The password rides in MYSQL_PWD so it stays off the process argv.
+  private async restoreMysqlDatabase(options: RestoreDatabaseOptions): Promise<void> {
+    const { restoreId, container, database, presignedUrl, adminUser, adminPassword } = options;
+    const env = [`MYSQL_PWD=${adminPassword}`];
+
+    // A terminal event is sent from exactly one place; `settled` stops the outer
+    // catch from emitting a second restore_failed after an inner branch already
+    // reported the outcome.
+    let settled = false;
+    const fail = (stage: RestoreStage, reason: string): Promise<void> => {
+      settled = true;
+      return this.failRestore(restoreId, stage, reason);
+    };
+
+    if (!VALID_DATABASE_NAME.test(database)) {
+      return fail("restore_failed", "database name must match ^[A-Za-z0-9_]+$");
+    }
+
+    try {
+      try {
+        await assertDiskSpace();
+      } catch (err) {
+        return fail("disk_precheck_failed", (err as Error).message);
+      }
+
+      let exists: boolean;
+      try {
+        exists = await this.mysqlSchemaExists(container, database, adminUser, env);
+      } catch (err) {
+        return fail("restore_failed", (err as Error).message);
+      }
+      if (exists) {
+        return fail("collision", `database "${database}" already exists on the target`);
+      }
+
+      await withTempFile(`restore-${restoreId}.sql`, async path => {
+        try {
+          await downloadFile(presignedUrl, path);
+        } catch (err) {
+          return fail("download_failed", (err as Error).message);
+        }
+
+        // Backtick-quoted identifier, internal backticks doubled.
+        const ident = `\`${database.replace(/`/g, "``")}\``;
+        const create = await this.dockerService.execCommandBuffered(
+          container,
+          ["mysql", "-u", adminUser, "-h", "127.0.0.1", "-e", `CREATE DATABASE ${ident}`],
+          { env },
+        );
+        if (create.exitCode !== 0) {
+          return fail("restore_failed", create.stderr.trim() || `mysql exited with code ${create.exitCode}`);
+        }
+
+        const restore = await this.dockerService.execCommandBuffered(
+          container,
+          ["mysql", "-u", adminUser, "-h", "127.0.0.1", database],
+          { env, inputFile: path },
+        );
+        if (restore.exitCode !== 0) {
+          return fail("restore_failed", restore.stderr.trim() || `mysql exited with code ${restore.exitCode}`);
+        }
+
+        settled = true;
+        info(this.name, "Database restore completed", { restoreId, container, database, engine: options.engine });
+        await httpService.postSafe({ type: "restore_completed", restoreId });
+      });
+    } catch (err) {
+      if (!settled) await this.failRestore(restoreId, "restore_failed", (err as Error).message);
     }
   }
 
@@ -357,6 +496,23 @@ export class BackupService {
     }
 
     return res.stdout.trim() === "1";
+  }
+
+  private async mysqlSchemaExists(container: string, database: string, user: string, env: string[]): Promise<boolean> {
+    // Name embedded as a quoted SQL literal (single quotes doubled). -N -B strips
+    // the column header and box drawing so a hit is just the bare schema name.
+    const literal = `'${database.replace(/'/g, "''")}'`;
+    const res = await this.dockerService.execCommandBuffered(
+      container,
+      ["mysql", "-u", user, "-h", "127.0.0.1", "-N", "-B", "-e", `SELECT SCHEMA_NAME FROM information_schema.schemata WHERE schema_name = ${literal}`],
+      { env },
+    );
+
+    if (res.exitCode !== 0) {
+      throw new Error(res.stderr.trim() || `mysql exited with code ${res.exitCode}`);
+    }
+
+    return res.stdout.trim() !== "";
   }
 
   private async failBackup(backupId: string, stage: BackupStage, reason: string): Promise<void> {

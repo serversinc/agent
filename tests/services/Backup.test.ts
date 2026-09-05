@@ -64,6 +64,19 @@ function streamOf(content: Buffer | string | null): Readable {
   return Readable.from(buf.length ? [buf] : []);
 }
 
+// Emits one chunk then errors, to exercise a dump that dies mid-stream.
+function erroringStream(message: string): Readable {
+  let emitted = false;
+  return new Readable({
+    read() {
+      if (emitted) return;
+      emitted = true;
+      this.push(Buffer.from("partial-dump-bytes"));
+      this.destroy(new Error(message));
+    },
+  });
+}
+
 function makeDockerStreamDump(content: Buffer | null, exitCode: number, stderr = "") {
   return {
     execCommandStream: vi.fn().mockResolvedValue({
@@ -394,6 +407,206 @@ describe("BackupService", () => {
         stage: "disk_precheck_failed",
         reason: expect.stringContaining("Insufficient disk space"),
       });
+    });
+  });
+
+  // ------------------------------------------------------ backupDatabase (mysql)
+
+  describe("backupDatabase — mysql engine", () => {
+    const mysqlDbOptions = { ...dbOptions, adminUser: "root", engine: "mysql" as const };
+
+    it("runs mysqldump with MYSQL_PWD, uploads the dump, and reports backup_completed", async () => {
+      const dump = Buffer.from("-- MySQL dump\nCREATE TABLE t (id int);\n");
+      const docker = makeDockerStreamDump(dump, 0);
+
+      await new BackupService(docker as any).backupDatabase(mysqlDbOptions);
+
+      expect(docker.execCommandStream).toHaveBeenCalledWith(
+        "db_container",
+        [
+          "mysqldump", "-u", "root", "-h", "127.0.0.1",
+          "--single-transaction", "--routines", "--triggers", "--events", "--set-gtid-purged=OFF",
+          "app_db",
+        ],
+        { env: ["MYSQL_PWD=s3cret"] },
+      );
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, any];
+      expect(url).toBe(mysqlDbOptions.presignedUrl);
+      expect(init.method).toBe("PUT");
+      expect(init.headers["Content-Length"]).toBe(String(dump.length));
+      expect(uploaded[0].equals(dump)).toBe(true);
+
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "backup_completed",
+        backupId: mysqlDbOptions.backupId,
+        size_bytes: dump.length,
+        checksum_sha256: createHash("sha256").update(dump).digest("hex"),
+      });
+      expect(leftoverTempFiles(mysqlDbOptions.backupId)).toEqual([]);
+    });
+
+    it("treats engine 'mariadb' the same as 'mysql'", async () => {
+      const docker = makeDockerStreamDump(Buffer.from("dump"), 0);
+
+      await new BackupService(docker as any).backupDatabase({ ...mysqlDbOptions, engine: "mariadb" });
+
+      expect(docker.execCommandStream.mock.calls[0][1][0]).toBe("mysqldump");
+    });
+
+    it("rejects a database name outside [A-Za-z0-9_] before running mysqldump", async () => {
+      const docker = makeDockerStreamDump(Buffer.from("dump"), 0);
+
+      await new BackupService(docker as any).backupDatabase({ ...mysqlDbOptions, database: "app-db; drop" });
+
+      expect(docker.execCommandStream).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "backup_failed",
+        backupId: mysqlDbOptions.backupId,
+        stage: "exec_failed",
+        reason: expect.stringContaining("A-Za-z0-9_"),
+      });
+    });
+
+    it("reports dump_failed with the mysqldump stderr and uploads nothing on a non-zero exit", async () => {
+      const docker = makeDockerStreamDump(Buffer.from("partial"), 2, "mysqldump: Got error: 1045: Access denied for user 'root'");
+
+      await new BackupService(docker as any).backupDatabase(mysqlDbOptions);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "backup_failed",
+        backupId: mysqlDbOptions.backupId,
+        stage: "dump_failed",
+        reason: "mysqldump: Got error: 1045: Access denied for user 'root'",
+      });
+      expect(leftoverTempFiles(mysqlDbOptions.backupId)).toEqual([]);
+    });
+
+    it("reports dump_failed and uploads nothing when the dump stream dies mid-transfer", async () => {
+      const docker = {
+        execCommandStream: vi.fn().mockResolvedValue({
+          stdout: erroringStream("read ECONNRESET"),
+          stderr: streamOf(""),
+          exitCode: vi.fn().mockResolvedValue(0),
+        }),
+      };
+
+      await new BackupService(docker as any).backupDatabase(mysqlDbOptions);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "backup_failed",
+        backupId: mysqlDbOptions.backupId,
+        stage: "dump_failed",
+        reason: expect.stringContaining("ECONNRESET"),
+      });
+      expect(leftoverTempFiles(mysqlDbOptions.backupId)).toEqual([]);
+    });
+  });
+
+  // ----------------------------------------------------- restoreDatabase (mysql)
+
+  describe("restoreDatabase — mysql engine", () => {
+    const mysqlRestoreOptions = { ...restoreDbOptions, adminUser: "root", engine: "mysql" as const };
+
+    it("probes information_schema, creates the database, imports the dump, and reports restore_completed", async () => {
+      const docker = makeDocker({
+        execCommandBuffered: vi
+          .fn()
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }) // schema probe: absent
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }) // CREATE DATABASE
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }), // mysql import
+      });
+
+      await new BackupService(docker as any).restoreDatabase(mysqlRestoreOptions);
+
+      expect(fetchMock).toHaveBeenCalledWith(mysqlRestoreOptions.presignedUrl, expect.objectContaining({ method: "GET" }));
+
+      const calls = docker.execCommandBuffered.mock.calls as any[][];
+      expect(calls.map(c => c[1][0])).toEqual(["mysql", "mysql", "mysql"]);
+
+      const probeArgv = calls[0][1] as string[];
+      expect(probeArgv).toContain("-N");
+      expect(probeArgv[probeArgv.length - 1]).toBe(
+        "SELECT SCHEMA_NAME FROM information_schema.schemata WHERE schema_name = 'app_db_copy'",
+      );
+
+      expect(calls[1][1]).toEqual(["mysql", "-u", "root", "-h", "127.0.0.1", "-e", "CREATE DATABASE `app_db_copy`"]);
+      expect(calls[2][1]).toEqual(["mysql", "-u", "root", "-h", "127.0.0.1", "app_db_copy"]);
+      expect(calls[2][2]).toMatchObject({ env: ["MYSQL_PWD=s3cret"], inputFile: expect.any(String) });
+
+      expect(postSafeMock).toHaveBeenCalledWith({ type: "restore_completed", restoreId: mysqlRestoreOptions.restoreId });
+      expect(leftoverTempFiles(mysqlRestoreOptions.restoreId)).toEqual([]);
+    });
+
+    it("rejects a database name outside [A-Za-z0-9_] before touching the target", async () => {
+      const docker = makeDocker();
+
+      await new BackupService(docker as any).restoreDatabase({ ...mysqlRestoreOptions, database: "a`b" });
+
+      expect(docker.execCommandBuffered).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "restore_failed",
+        restoreId: mysqlRestoreOptions.restoreId,
+        stage: "restore_failed",
+        reason: expect.stringContaining("A-Za-z0-9_"),
+      });
+    });
+
+    it("aborts with restore_failed / stage collision when information_schema already lists the database", async () => {
+      const docker = makeDocker({
+        execCommandBuffered: vi.fn().mockResolvedValue({ stdout: "app_db_copy\n", stderr: "", exitCode: 0 }),
+      });
+
+      await new BackupService(docker as any).restoreDatabase(mysqlRestoreOptions);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(docker.execCommandBuffered).toHaveBeenCalledTimes(1); // probe only, no CREATE DATABASE
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "restore_failed",
+        restoreId: mysqlRestoreOptions.restoreId,
+        stage: "collision",
+        reason: expect.stringContaining("already exists"),
+      });
+    });
+
+    it("reports restore_failed with the mysql stderr when the import exits non-zero", async () => {
+      const docker = makeDocker({
+        execCommandBuffered: vi
+          .fn()
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }) // probe
+          .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }) // CREATE DATABASE
+          .mockResolvedValueOnce({ stdout: "", stderr: "ERROR 1064 (42000) at line 5: You have an error in your SQL syntax", exitCode: 1 }),
+      });
+
+      await new BackupService(docker as any).restoreDatabase(mysqlRestoreOptions);
+
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "restore_failed",
+        restoreId: mysqlRestoreOptions.restoreId,
+        stage: "restore_failed",
+        reason: "ERROR 1064 (42000) at line 5: You have an error in your SQL syntax",
+      });
+      expect(leftoverTempFiles(mysqlRestoreOptions.restoreId)).toEqual([]);
+    });
+
+    it("reports download_failed and never creates the database when the GET is rejected", async () => {
+      fetchMock.mockImplementation(async () => ({ ok: false, status: 404, body: null }));
+      const docker = makeDocker();
+
+      await new BackupService(docker as any).restoreDatabase(mysqlRestoreOptions);
+
+      expect(docker.execCommandBuffered).toHaveBeenCalledTimes(1); // probe only
+      expect(postSafeMock).toHaveBeenCalledWith({
+        type: "restore_failed",
+        restoreId: mysqlRestoreOptions.restoreId,
+        stage: "download_failed",
+        reason: expect.stringContaining("404"),
+      });
+      expect(leftoverTempFiles(mysqlRestoreOptions.restoreId)).toEqual([]);
     });
   });
 
