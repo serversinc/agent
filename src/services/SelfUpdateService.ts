@@ -1,8 +1,8 @@
 import { DockerService } from "./Docker";
 import { httpService } from "./Http";
+import { heartbeatService, type HeartbeatAgentUpdate } from "./HeartbeatService";
 import { info, warn, error as logError } from "../utils/console";
 import config from "../config";
-import type { HeartbeatAgentUpdate } from "./HeartbeatService";
 
 interface UpdateTarget {
   version: string;
@@ -220,7 +220,7 @@ export class SelfUpdateService {
       return false;
     }
 
-    return httpService.postSafe({ type: "alive" });
+    return heartbeatService.ping();
   }
 
   private async cleanupSelf(): Promise<void> {

@@ -1,8 +1,5 @@
 import { cpus, totalmem, freemem, uptime } from "os";
 import { execSync } from "child_process";
-import { info, warn } from "../utils/console";
-import { httpService } from "./Http";
-import config from "../config";
 
 interface DiskInfo {
   Filesystem: string;
@@ -20,52 +17,11 @@ interface NetworkDeltas {
 }
 
 export class MetricsService {
-  private readonly name = "Metrics";
-  private intervalId: ReturnType<typeof setInterval> | null = null;
   private prevRx = 0;
   private prevTx = 0;
   private prevRxTime = 0;
 
-  start(): void {
-    if (this.intervalId) {
-      return;
-    }
-
-    info(this.name, "Starting metrics collector", {
-      intervalMs: config.METRICS_INTERVAL_MS,
-    });
-
-    this.collectAndSend();
-
-    this.intervalId = setInterval(() => {
-      this.collectAndSend();
-    }, config.METRICS_INTERVAL_MS);
-  }
-
-  stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      info(this.name, "Metrics collector stopped");
-    }
-  }
-
-  private collectAndSend(): void {
-    try {
-      const payload = this.collect();
-      httpService.postSafe({ type: "metrics", ...payload }).then(success => {
-        if (!success) {
-          warn(this.name, "Failed to send metrics");
-        }
-      });
-    } catch (err) {
-      warn(this.name, "Failed to collect metrics", {
-        error: (err as Error).message,
-      });
-    }
-  }
-
-  private collect(): Record<string, unknown> {
+  collect(): Record<string, unknown> {
     const cpuInfo = cpus();
     const loadAvg = require("os").loadavg();
 
