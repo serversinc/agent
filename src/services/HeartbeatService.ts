@@ -1,5 +1,6 @@
 import { info, warn } from "../utils/console";
 import { httpService } from "./Http";
+import { metricsService } from "./MetricsService";
 import config from "../config";
 
 export interface HeartbeatAgentUpdate {
@@ -45,9 +46,27 @@ export class HeartbeatService {
     this.targetVersionHandler = handler;
   }
 
+  /**
+   * Lightweight liveness round-trip with no usage payload and no update handling.
+   * Used as a readiness probe.
+   */
+  async ping(): Promise<boolean> {
+    return httpService.postSafe({ type: "alive" });
+  }
+
   private async send(): Promise<void> {
+    let usage: Record<string, unknown> = {};
+
     try {
-      const response = await httpService.post<HeartbeatResponse>({ type: "alive" });
+      usage = await metricsService.collect();
+    } catch (err) {
+      warn(this.name, "Failed to collect usage for heartbeat", {
+        error: (err as Error).message,
+      });
+    }
+
+    try {
+      const response = await httpService.post<HeartbeatResponse>({ ...usage, type: "alive" });
 
       if (response?.agent && this.targetVersionHandler) {
         this.targetVersionHandler(response.agent);

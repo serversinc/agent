@@ -1,9 +1,6 @@
 import { cpus, freemem, loadavg, totalmem, uptime } from "os";
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
-import { info, warn } from "../utils/console";
-import { httpService } from "./Http";
-import config from "../config";
 
 interface DiskInfo {
   Filesystem: string;
@@ -37,51 +34,11 @@ interface MemoryUsage {
 const CPU_SAMPLE_MS = 1000;
 
 export class MetricsService {
-  private readonly name = "Metrics";
-  private intervalId: ReturnType<typeof setInterval> | null = null;
   private prevRx = 0;
   private prevTx = 0;
   private prevRxTime = 0;
 
-  start(): void {
-    if (this.intervalId) {
-      return;
-    }
-
-    info(this.name, "Starting metrics collector", {
-      intervalMs: config.METRICS_INTERVAL_MS,
-    });
-
-    void this.collectAndSend();
-
-    this.intervalId = setInterval(() => {
-      void this.collectAndSend();
-    }, config.METRICS_INTERVAL_MS);
-  }
-
-  stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-      info(this.name, "Metrics collector stopped");
-    }
-  }
-
-  private async collectAndSend(): Promise<void> {
-    try {
-      const payload = await this.collect();
-      const success = await httpService.postSafe({ type: "metrics", ...payload });
-      if (!success) {
-        warn(this.name, "Failed to send metrics");
-      }
-    } catch (err) {
-      warn(this.name, "Failed to collect metrics", {
-        error: (err as Error).message,
-      });
-    }
-  }
-
-  private async collect(): Promise<Record<string, unknown>> {
+  async collect(): Promise<Record<string, unknown>> {
     const cpu = await this.getCpuUsage();
     const memory = this.getMemoryUsage();
 
