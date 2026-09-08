@@ -1,5 +1,6 @@
-import { cpus, totalmem, freemem, uptime } from "os";
+import { cpus, freemem, loadavg, totalmem, uptime } from "os";
 import { execSync } from "child_process";
+import { readFileSync } from "fs";
 import { info, warn } from "../utils/console";
 import { httpService } from "./Http";
 import config from "../config";
@@ -19,6 +20,22 @@ interface NetworkDeltas {
   txDelta: number;
 }
 
+interface CpuUsage {
+  cores: number;
+  utilisation: number;
+  load: number;
+}
+
+interface MemoryUsage {
+  total: number;
+  free: number;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+}
+
+const CPU_SAMPLE_MS = 1000;
+
 export class MetricsService {
   private readonly name = "Metrics";
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -35,10 +52,10 @@ export class MetricsService {
       intervalMs: config.METRICS_INTERVAL_MS,
     });
 
-    this.collectAndSend();
+    void this.collectAndSend();
 
     this.intervalId = setInterval(() => {
-      this.collectAndSend();
+      void this.collectAndSend();
     }, config.METRICS_INTERVAL_MS);
   }
 
@@ -50,14 +67,13 @@ export class MetricsService {
     }
   }
 
-  private collectAndSend(): void {
+  private async collectAndSend(): Promise<void> {
     try {
-      const payload = this.collect();
-      httpService.postSafe({ type: "metrics", ...payload }).then(success => {
-        if (!success) {
-          warn(this.name, "Failed to send metrics");
-        }
-      });
+      const payload = await this.collect();
+      const success = await httpService.postSafe({ type: "metrics", ...payload });
+      if (!success) {
+        warn(this.name, "Failed to send metrics");
+      }
     } catch (err) {
       warn(this.name, "Failed to collect metrics", {
         error: (err as Error).message,
@@ -65,28 +81,79 @@ export class MetricsService {
     }
   }
 
-  private collect(): Record<string, unknown> {
-    const cpuInfo = cpus();
-    const loadAvg = require("os").loadavg();
+  private async collect(): Promise<Record<string, unknown>> {
+    const cpu = await this.getCpuUsage();
+    const memory = this.getMemoryUsage();
 
     const disk = this.getDiskInfo();
     const network = this.getNetworkInfo();
 
     return {
       usage: {
-        cpu: {
-          cores: cpuInfo.length,
-          load: loadAvg[0],
-        },
-        memory: {
-          total: Math.round(totalmem() / (1024 * 1024 * 1024)),
-          free: Math.round(freemem() / (1024 * 1024 * 1024)),
-        },
+        cpu,
+        memory,
         uptimeMinutes: Math.round(uptime() / 60),
       },
       disk,
       network,
     };
+  }
+
+  private async getCpuUsage(sampleMs: number = CPU_SAMPLE_MS): Promise<CpuUsage> {
+    const start = this.readCpuTimes();
+    await new Promise(resolve => setTimeout(resolve, sampleMs));
+    const end = this.readCpuTimes();
+
+    const idleDelta = end.idle - start.idle;
+    const totalDelta = end.total - start.total;
+
+    const utilisation = totalDelta > 0 ? (1 - idleDelta / totalDelta) * 100 : 0;
+
+    return {
+      cores: cpus().length,
+      utilisation: Math.min(100, Math.max(0, Math.round(utilisation * 100) / 100)),
+      load: loadavg()[0],
+    };
+  }
+
+  private readCpuTimes(): { idle: number; total: number } {
+    let idle = 0;
+    let total = 0;
+
+    for (const cpu of cpus()) {
+      idle += cpu.times.idle;
+      total += cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.idle + cpu.times.irq;
+    }
+
+    return { idle, total };
+  }
+
+  private getMemoryUsage(): MemoryUsage {
+    const totalBytes = totalmem();
+    const freeBytes = freemem();
+
+    const availableBytes = this.readMemAvailable() ?? freeBytes;
+
+    return {
+      total: Math.round(totalBytes / (1024 * 1024 * 1024)),
+      free: Math.round(freeBytes / (1024 * 1024 * 1024)),
+      total_bytes: totalBytes,
+      used_bytes: Math.max(0, totalBytes - availableBytes),
+      available_bytes: availableBytes,
+    };
+  }
+
+  private readMemAvailable(): number | null {
+    try {
+      const output = readFileSync("/proc/meminfo", "utf8");
+      const match = output.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+      if (!match) {
+        return null;
+      }
+      return parseInt(match[1], 10) * 1024;
+    } catch {
+      return null;
+    }
   }
 
   private getDiskInfo(): DiskInfo[] {
