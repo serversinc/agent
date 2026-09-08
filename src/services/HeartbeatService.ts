@@ -58,7 +58,7 @@ export class HeartbeatService {
     let usage: Record<string, unknown> = {};
 
     try {
-      usage = metricsService.collect();
+      usage = await metricsService.collect();
     } catch (err) {
       warn(this.name, "Failed to collect usage for heartbeat", {
         error: (err as Error).message,
