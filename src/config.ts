@@ -41,15 +41,9 @@ const configSchema = z.object({
 
   HEARTBEAT_INTERVAL_MS: z
     .string()
-    .default("30000")
+    .default("300000")
     .transform(val => parseInt(val, 10))
-    .pipe(z.number().int().positive().max(300000)),
-
-  METRICS_INTERVAL_MS: z
-    .string()
-    .default("60000")
-    .transform(val => parseInt(val, 10))
-    .pipe(z.number().int().positive().max(600000)),
+    .pipe(z.number().int().positive().max(900000)),
 
   STATE_CHECK_INTERVAL_MS: z
     .string()
@@ -79,7 +73,6 @@ function loadConfig(): AppConfig {
       LOGGER_LEVEL: process.env.LOGGER_LEVEL,
       LOGGER_PRETTY: process.env.LOGGER_PRETTY,
       HEARTBEAT_INTERVAL_MS: process.env.HEARTBEAT_INTERVAL_MS,
-      METRICS_INTERVAL_MS: process.env.METRICS_INTERVAL_MS,
       STATE_CHECK_INTERVAL_MS: process.env.STATE_CHECK_INTERVAL_MS,
       REPOS_DIR: process.env.REPOS_DIR,
       AGENT_VERSION: process.env.AGENT_VERSION,

@@ -16,7 +16,6 @@ import { ShellService } from "./services/Shell";
 import { WatcherService } from "./services/Watcher";
 import { BackupService } from "./services/Backup";
 import { heartbeatService } from "./services/HeartbeatService";
-import { metricsService } from "./services/MetricsService";
 import { stateCheckService } from "./services/StateCheckService";
 import { securityService } from "./services/SecurityService";
 import { packageService } from "./services/PackageService";
@@ -38,7 +37,6 @@ heartbeatService.setTargetVersionHandler(agent => selfUpdateService.onHeartbeatT
 
 watcherService.start();
 heartbeatService.start();
-metricsService.start();
 stateCheckService.start();
 
 const containerHandlers  = createContainerHandlers(dockerService);
