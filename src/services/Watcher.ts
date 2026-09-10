@@ -26,6 +26,7 @@ interface EventPayload {
   event: string;
   type: string;
   id: string;
+  time: number;
   attributes: Record<string, unknown>;
 }
 
@@ -191,8 +192,32 @@ export class WatcherService {
       event: event.Action,
       type: event.Type,
       id: event.Actor.ID,
+      time: event.time,
       attributes: event.Actor.Attributes,
     };
+
+    // Enrich an image pull with the details only an inspect can give — the raw
+    // event carries just the reference. `Actor.ID` is that reference; a failed
+    // inspect still forwards the bare event.
+    if (event.Action === "pull" && event.Type === "image") {
+      try {
+        const image = await this.docker.getImage(event.Actor.ID);
+
+        payload.attributes = {
+          docker_id: image.Id,
+          repo_tags: image.RepoTags ?? [],
+          repo_digests: image.RepoDigests ?? [],
+          size: image.Size,
+          created: image.Created,
+        };
+      } catch (err) {
+        error(this.name, "Failed to enrich event with image details", {
+          error: (err as Error).message,
+          imageRef: event.Actor.ID,
+        });
+        // Continue forwarding even if enrichment fails
+      }
+    }
 
     // Enrich with container details on creation
     if (event.Action === "create" && event.Type === "container") {
@@ -237,6 +262,10 @@ export class WatcherService {
 
   // Filter logic (customizable later)
   private shouldForward(event: DockerEvent): boolean {
+    if (event.Type === "image") {
+      return event.Action === "pull" || event.Action === "delete";
+    }
+
     if (event.Type !== "container") {
       return false;
     }
