@@ -87,6 +87,147 @@ describe("WatcherService", () => {
     );
   });
 
+  it("enriches an image pull event from the image inspect before forwarding", async () => {
+    mockDockerService.getImage = vi.fn().mockResolvedValue({
+      Id: "sha256:redis7",
+      RepoTags: ["redis:7"],
+      RepoDigests: ["redis@sha256:digest"],
+      Size: 128_000_000,
+      Created: "2026-09-01T00:00:00Z",
+    });
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    stream.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          Type: "image",
+          Action: "pull",
+          Actor: { ID: "redis:7", Attributes: { name: "redis:7" } },
+          time: 1_700_000_000,
+          timeNano: 0,
+        }) + "\n",
+      ),
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockDockerService.getImage).toHaveBeenCalledWith("redis:7");
+    expect(httpService.postSafe).toHaveBeenCalledWith({
+      type: "docker_event",
+      payload: {
+        event: "pull",
+        type: "image",
+        id: "redis:7",
+        time: 1_700_000_000,
+        attributes: {
+          docker_id: "sha256:redis7",
+          repo_tags: ["redis:7"],
+          repo_digests: ["redis@sha256:digest"],
+          size: 128_000_000,
+          created: "2026-09-01T00:00:00Z",
+        },
+      },
+    });
+  });
+
+  it("still forwards an image pull event when the inspect fails", async () => {
+    mockDockerService.getImage = vi.fn().mockRejectedValue(new Error("no such image"));
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    stream.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          Type: "image",
+          Action: "pull",
+          Actor: { ID: "ghost:latest", Attributes: { name: "ghost:latest" } },
+          time: 42,
+          timeNano: 0,
+        }) + "\n",
+      ),
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(httpService.postSafe).toHaveBeenCalledWith({
+      type: "docker_event",
+      payload: {
+        event: "pull",
+        type: "image",
+        id: "ghost:latest",
+        time: 42,
+        attributes: { name: "ghost:latest" },
+      },
+    });
+  });
+
+  it("forwards an image delete event without an inspect", async () => {
+    mockDockerService.getImage = vi.fn();
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    stream.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          Type: "image",
+          Action: "delete",
+          Actor: { ID: "sha256:gone", Attributes: {} },
+          time: 7,
+          timeNano: 0,
+        }) + "\n",
+      ),
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockDockerService.getImage).not.toHaveBeenCalled();
+    expect(httpService.postSafe).toHaveBeenCalledWith({
+      type: "docker_event",
+      payload: { event: "delete", type: "image", id: "sha256:gone", time: 7, attributes: {} },
+    });
+  });
+
+  it("does not forward image tag events", async () => {
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    stream.emit(
+      "data",
+      Buffer.from(
+        JSON.stringify({
+          Type: "image",
+          Action: "tag",
+          Actor: { ID: "sha256:x", Attributes: {} },
+          time: 1,
+          timeNano: 0,
+        }) + "\n",
+      ),
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(httpService.postSafe).not.toHaveBeenCalled();
+  });
+
   it("drops back to stopped when the event stream ends, so scheduleRestart can retry", async () => {
     vi.useFakeTimers();
 

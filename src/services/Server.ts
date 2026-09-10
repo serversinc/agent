@@ -90,6 +90,7 @@ export function startServer(
   app.get("/images", imageHandlers.list);
   app.get("/images/:id", imageHandlers.get);
   app.post("/images/pull", zValidator("json", pullImageSchema), imageHandlers.pull);
+  app.post("/images/prune", imageHandlers.prune);
   app.post("/images", zValidator("json", createImageSchema), imageHandlers.build);
   app.delete("/images/:id", imageHandlers.remove);
 

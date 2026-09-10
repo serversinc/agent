@@ -134,35 +134,64 @@ describe("Image Handlers", () => {
   });
 
   describe("DELETE /images/:id", () => {
-    it("should remove an image", async () => {
+    it("should remove an image, defaulting force to false", async () => {
       mockDockerService.removeImage.mockResolvedValue(undefined);
 
       const response = await request(server).delete("/images/sha256:abc123");
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
-      expect(mockDockerService.removeImage).toHaveBeenCalledWith("sha256:abc123");
+      expect(mockDockerService.removeImage).toHaveBeenCalledWith("sha256:abc123", false);
     });
 
-    it("should handle remove errors", async () => {
-      mockDockerService.removeImage.mockRejectedValue(new Error("image is being used"));
+    it("should pass force=true through when the query flag is set", async () => {
+      mockDockerService.removeImage.mockResolvedValue(undefined);
+
+      const response = await request(server).delete("/images/sha256:abc123?force=true");
+
+      expect(response.status).toBe(200);
+      expect(mockDockerService.removeImage).toHaveBeenCalledWith("sha256:abc123", true);
+    });
+
+    it("surfaces the daemon status when the image is still in use", async () => {
+      mockDockerService.removeImage.mockRejectedValue(
+        Object.assign(new Error("conflict: unable to delete sha256:abc123 - image is being used by running container 9c1"), {
+          statusCode: 409,
+        }),
+      );
 
       const response = await request(server).delete("/images/sha256:abc123");
 
-      expect(response.status).toBe(500);
-      expect(response.body.error).toBe("image is being used");
+      expect(response.status).toBe(409);
+      expect(response.body.error).toContain("image is being used by running container");
     });
   });
 
   describe("POST /images/prune", () => {
-    it("should prune unused images", async () => {
-      mockDockerService.pruneImages.mockResolvedValue({ ImagesDeleted: [], SpaceReclaimed: 0 });
+    it("prunes dangling images and returns reclaimed space", async () => {
+      mockDockerService.pruneImages.mockResolvedValue({
+        ImagesDeleted: [{ Deleted: "sha256:old" }],
+        SpaceReclaimed: 4096,
+      });
 
       const response = await request(server).post("/images/prune");
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(mockDockerService.pruneImages).toHaveBeenCalledTimes(1);
+      expect(response.body).toMatchObject({
+        success: true,
+        space_reclaimed: 4096,
+        images_deleted: [{ Deleted: "sha256:old" }],
+      });
+      expect(mockDockerService.pruneImages).toHaveBeenCalledWith(false);
+    });
+
+    it("prunes all unused images when all=true", async () => {
+      mockDockerService.pruneImages.mockResolvedValue({ ImagesDeleted: [], SpaceReclaimed: 0 });
+
+      const response = await request(server).post("/images/prune?all=true");
+
+      expect(response.status).toBe(200);
+      expect(mockDockerService.pruneImages).toHaveBeenCalledWith(true);
     });
 
     it("should handle prune errors", async () => {

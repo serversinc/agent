@@ -109,6 +109,48 @@ describe("DockerService", () => {
     });
   });
 
+  describe("pruneImages", () => {
+    it("prunes only dangling images by default", async () => {
+      const pruneImages = vi.fn().mockResolvedValue({ ImagesDeleted: [], SpaceReclaimed: 0 });
+      (service.docker as any).pruneImages = pruneImages;
+
+      await service.pruneImages();
+
+      expect(pruneImages).toHaveBeenCalledWith({});
+    });
+
+    it("passes the dangling=false filter when all is true", async () => {
+      const pruneImages = vi.fn().mockResolvedValue({ ImagesDeleted: [], SpaceReclaimed: 123 });
+      (service.docker as any).pruneImages = pruneImages;
+
+      const result = await service.pruneImages(true);
+
+      expect(pruneImages).toHaveBeenCalledWith({ filters: { dangling: ["false"] } });
+      expect(result.SpaceReclaimed).toBe(123);
+    });
+  });
+
+  describe("removeImage", () => {
+    it("forwards the force flag to dockerode", async () => {
+      const remove = vi.fn().mockResolvedValue(undefined);
+      (service.docker as any).getImage = vi.fn().mockReturnValue({ remove });
+
+      await service.removeImage("sha256:abc", true);
+
+      expect((service.docker as any).getImage).toHaveBeenCalledWith("sha256:abc");
+      expect(remove).toHaveBeenCalledWith({ force: true });
+    });
+
+    it("defaults force to false", async () => {
+      const remove = vi.fn().mockResolvedValue(undefined);
+      (service.docker as any).getImage = vi.fn().mockReturnValue({ remove });
+
+      await service.removeImage("sha256:abc");
+
+      expect(remove).toHaveBeenCalledWith({ force: false });
+    });
+  });
+
   describe("renameContainer", () => {
     it("renames the given container", async () => {
       const rename = vi.fn().mockResolvedValue(undefined);

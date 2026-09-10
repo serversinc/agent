@@ -510,10 +510,14 @@ export class DockerService {
     }
   }
 
-  async pruneImages(): Promise<Docker.PruneImagesInfo> {
+  // `all` mirrors `docker image prune -a`: without it only dangling images go,
+  // with it every image not referenced by a container is fair game.
+  async pruneImages(all: boolean = false): Promise<Docker.PruneImagesInfo> {
     try {
-      const result = await this.docker.pruneImages();
+      const options = all ? { filters: { dangling: ["false"] } } : {};
+      const result = await this.docker.pruneImages(options);
       info(this.name, "Pruned images", {
+        all,
         spaceReclaimed: result.SpaceReclaimed,
         imagesDeleted: result.ImagesDeleted?.length || 0,
       });

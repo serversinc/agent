@@ -77,7 +77,8 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
   async function remove(ctx: Context) {
     try {
       const id = ctx.req.param("id");
-      await dockerService.removeImage(id);
+      const force = ctx.req.query("force") === "true";
+      await dockerService.removeImage(id, force);
       return ctx.json({ success: true, message: "image removed" });
     } catch (err) {
       return handleError(ctx, err, "Image", "remove image", { id: ctx.req.param("id") });
@@ -86,8 +87,17 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
 
   async function prune(ctx: Context) {
     try {
-      await dockerService.pruneImages();
-      return ctx.json({ success: true, message: "images pruned" });
+      const all = ctx.req.query("all") === "true";
+
+      const result = await dockerService.pruneImages(all);
+
+      info("Image", "Pruned images", { all, spaceReclaimed: result.SpaceReclaimed });
+
+      return ctx.json({
+        success: true,
+        space_reclaimed: result.SpaceReclaimed ?? 0,
+        images_deleted: result.ImagesDeleted ?? [],
+      });
     } catch (err) {
       return handleError(ctx, err, "Image", "prune images");
     }
