@@ -16,17 +16,6 @@ interface CreateImageOptions {
   token: string;
 }
 
-// `POST /images/prune` is valid with no body at all; only `{ "all": true }`
-// changes behaviour, so an absent or non-JSON body is treated as `{}`.
-async function readJsonBody(ctx: Context): Promise<Record<string, unknown>> {
-  try {
-    const body = await ctx.req.json();
-    return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
 export function createImageHandlers(dockerService: DockerService, buildService: BuildService) {
   if (!dockerService) throw new Error("Docker service is required");
   if (!buildService) throw new Error("Build service is required");
@@ -98,7 +87,7 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
 
   async function prune(ctx: Context) {
     try {
-      const all = (await readJsonBody(ctx)).all === true;
+      const all = ctx.req.query("all") === "true";
 
       const result = await dockerService.pruneImages(all);
 

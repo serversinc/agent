@@ -188,7 +188,7 @@ describe("Image Handlers", () => {
     it("prunes all unused images when all=true", async () => {
       mockDockerService.pruneImages.mockResolvedValue({ ImagesDeleted: [], SpaceReclaimed: 0 });
 
-      const response = await request(server).post("/images/prune").send({ all: true });
+      const response = await request(server).post("/images/prune?all=true");
 
       expect(response.status).toBe(200);
       expect(mockDockerService.pruneImages).toHaveBeenCalledWith(true);
