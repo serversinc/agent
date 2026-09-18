@@ -1,6 +1,6 @@
 import { runHost, hostFileExists, readHostFile } from "./HostShell";
 
-export type CheckKey = "root_ssh_login" | "auto_updates" | "firewall" | "fail2ban" | "time_sync";
+export type CheckKey = "root_ssh_login" | "auto_updates" | "firewall" | "fail2ban" | "time_sync" | "os_updates";
 export type CheckStatus = "good" | "bad" | "unknown";
 
 export interface StateCheckResult {
@@ -113,6 +113,40 @@ export function checkTimeSync(): StateCheckResult {
   }
 }
 
+/**
+ * Counts the packages `apt-get -s dist-upgrade` plans to upgrade and how many
+ * of them come from a security pocket. An upgrade line looks like:
+ *
+ *   Inst libssl3 [3.0.2-0ubuntu1.7] (3.0.2-0ubuntu1.10 Ubuntu:22.04/jammy-security [amd64])
+ *
+ * `Inst` lines without a `[oldVersion]` bracket are new installs pulled in by
+ * the dependency resolution, not upgrades, so they are not counted.
+ */
+export function parseAptUpgrades(output: string): { total: number; security: number } {
+  let total = 0;
+  let security = 0;
+  for (const line of output.split("\n")) {
+    if (!/^Inst\s+\S+\s+\[[^\]]+\]/.test(line)) continue;
+    total += 1;
+    if (/security/i.test(line)) security += 1;
+  }
+  return { total, security };
+}
+
+export function checkOsUpdates(): StateCheckResult {
+  try {
+    const hasApt = hostFileExists("/usr/bin/apt-get") || hostFileExists("/usr/bin/apt");
+    if (!hasApt) {
+      return { check_key: "os_updates", status: "unknown", detail: null };
+    }
+    const output = runHost("sh -c 'apt-get -s -q dist-upgrade 2>/dev/null || true'");
+    const { total, security } = parseAptUpgrades(output);
+    return { check_key: "os_updates", status: total > 0 ? "bad" : "good", detail: { total, security } };
+  } catch {
+    return { check_key: "os_updates", status: "unknown", detail: null };
+  }
+}
+
 export function runSecurityChecks(): StateCheckResult[] {
   return [
     checkRootSshLogin(),
@@ -120,5 +154,6 @@ export function runSecurityChecks(): StateCheckResult[] {
     checkFirewall(),
     checkFail2ban(),
     checkTimeSync(),
+    checkOsUpdates(),
   ];
 }
