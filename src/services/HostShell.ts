@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 
 /**
  * The agent runs as a container (Alpine base) but ufw/sshd/fail2ban/apt are
@@ -10,9 +10,26 @@ import { execSync } from "child_process";
  * container user cannot open /proc/1/ns/* even with capabilities granted.
  */
 const NSENTER = "nsenter -t 1 -m -u -i -n -p --";
+const NSENTER_ARGS = ["-t", "1", "-m", "-u", "-i", "-n", "-p", "--"];
 
 export function runHost(cmd: string): string {
   return execSync(`${NSENTER} ${cmd}`, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
+/**
+ * Run a host binary with a fixed argv and no shell, the way `runHost` reaches
+ * the host but without ever concatenating a command string. Because every
+ * argument crosses as a discrete argv entry there is no place for shell
+ * metacharacters to be interpreted, and stderr is captured so callers can
+ * surface why a command failed (execFileSync exposes it on the thrown error).
+ * Used by SystemdService, whose arguments include user-supplied unit names.
+ */
+export function runHostExec(binary: string, args: string[] = [], options: { timeout?: number } = {}): string {
+  return execFileSync("nsenter", [...NSENTER_ARGS, binary, ...args], {
+    encoding: "utf8",
+    timeout: options.timeout ?? 5000,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 export function hostFileExists(path: string): boolean {

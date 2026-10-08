@@ -7,6 +7,7 @@ import { createShellHandlers } from "./controllers/shell";
 import { createSecurityHandlers } from "./controllers/security";
 import { createPackageHandlers } from "./controllers/packages";
 import { createBackupHandlers } from "./controllers/backups";
+import { createServiceHandlers } from "./controllers/services";
 
 import { startServer } from "./services/Server";
 import { DockerService } from "./services/Docker";
@@ -20,6 +21,7 @@ import { stateCheckService } from "./services/StateCheckService";
 import { securityService } from "./services/SecurityService";
 import { packageService } from "./services/PackageService";
 import { SelfUpdateService } from "./services/SelfUpdateService";
+import { systemdService } from "./services/SystemdService";
 
 import { hostname } from "os";
 import { error as logError } from "./utils/console";
@@ -48,6 +50,7 @@ const shellHandlers      = createShellHandlers(shellService, dockerService);
 const securityHandlers   = createSecurityHandlers(securityService);
 const packageHandlers    = createPackageHandlers(packageService);
 const backupHandlers     = createBackupHandlers(backupService);
+const serviceHandlers    = createServiceHandlers(systemdService);
 
 startServer(
   containerHandlers,
@@ -59,6 +62,7 @@ startServer(
   securityHandlers,
   packageHandlers,
   backupHandlers,
+  serviceHandlers,
   config.PORT,
 );
 
