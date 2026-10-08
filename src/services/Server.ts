@@ -12,6 +12,7 @@ import { runShellSchema, runComposeSchema, execContainerSchema } from "../valida
 import { toggleSchema, firewallPortSchema } from "../validators/Security";
 import { installPackageSchema } from "../validators/Packages";
 import { backupDatabaseSchema, backupGlobalsSchema, restoreDatabaseSchema, backupVolumeSchema, restoreVolumeSchema } from "../validators/Backups";
+import { serviceActionSchema, serviceJournalQuerySchema } from "../validators/Services";
 import { healthHandler } from "../controllers/health";
 
 import { info } from "../utils/console";
@@ -28,6 +29,7 @@ import type { createShellHandlers } from "../controllers/shell";
 import type { createSecurityHandlers } from "../controllers/security";
 import type { createPackageHandlers } from "../controllers/packages";
 import type { createBackupHandlers } from "../controllers/backups";
+import type { createServiceHandlers } from "../controllers/services";
 
 type ContainerHandlers = ReturnType<typeof createContainerHandlers>;
 type DeploymentHandlers = ReturnType<typeof createDeploymentHandlers>;
@@ -38,6 +40,7 @@ type ShellHandlers = ReturnType<typeof createShellHandlers>;
 type SecurityHandlers = ReturnType<typeof createSecurityHandlers>;
 type PackageHandlers = ReturnType<typeof createPackageHandlers>;
 type BackupHandlers = ReturnType<typeof createBackupHandlers>;
+type ServiceHandlers = ReturnType<typeof createServiceHandlers>;
 
 export function startServer(
   containerHandlers: ContainerHandlers,
@@ -49,6 +52,7 @@ export function startServer(
   securityHandlers: SecurityHandlers,
   packageHandlers: PackageHandlers,
   backupHandlers: BackupHandlers,
+  serviceHandlers: ServiceHandlers,
   port?: number,
 ) {
   const app = new Hono();
@@ -130,6 +134,11 @@ export function startServer(
   app.post("/backups/volume",    zValidator("json", backupVolumeSchema),    backupHandlers.backupVolume);
   app.post("/restores/database", zValidator("json", restoreDatabaseSchema), backupHandlers.restoreDatabase);
   app.post("/restores/volume",   zValidator("json", restoreVolumeSchema),   backupHandlers.restoreVolume);
+
+  // Services (systemd units on the host)
+  app.get("/services", serviceHandlers.list);
+  app.post("/services/:unit/actions", zValidator("json", serviceActionSchema), serviceHandlers.action);
+  app.get("/services/:unit/journal", zValidator("query", serviceJournalQuerySchema), serviceHandlers.journal);
 
   serve(
     {
