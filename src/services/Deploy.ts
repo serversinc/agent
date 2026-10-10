@@ -72,6 +72,10 @@ export class DeployService {
     // before it is discarded so the failure can be diagnosed afterwards.
     let containerLogs: string[] = [];
 
+    // Set once the new container exists, so a throw after creation can still
+    // read its output.
+    let newContainerId: string | null = null;
+
     // `recreate` stops the retire set up front to free its ports/volumes, then
     // removes it only once the new container is healthy. Until then the old
     // containers are a stopped standby we can start again if the deploy fails.
@@ -95,7 +99,7 @@ export class DeployService {
       }
 
       log("Creating new container");
-      const newContainerId = await this.createContainer(options.container, log);
+      newContainerId = await this.createContainer(options.container, log);
 
       const healthy = options.health
         ? await this.waitForHealthy(newContainerId, options.health, log)
@@ -145,10 +149,14 @@ export class DeployService {
         await this.restoreRetired(options, log);
       }
 
+      if (newContainerId !== null) {
+        containerLogs = await this.captureLogs(newContainerId);
+      }
+
       // Only `retired` (containers we definitely removed) is reported here.
       // A new container created before the throw may still be running — its
       // fate is left to Core's periodic container reconciliation.
-      return await this.report(options, "failed", logs, message, null, retired, discarded);
+      return await this.report(options, "failed", logs, message, null, retired, discarded, containerLogs);
     }
   }
 
@@ -335,10 +343,16 @@ export class DeployService {
   private async captureLogs(id: string): Promise<string[]> {
     try {
       const buffer = await this.docker.getContainerLogs(id, { tail: FAILED_CONTAINER_LOG_TAIL });
-      const frames = new DockerLogFrameParser().push(buffer);
 
-      return frames
-        .flatMap(frame => frame.message.split("\n"))
+      // A container started with a TTY returns plain text, not multiplexed
+      // frames. Frame headers start with a stream byte (0-2) then three zero bytes.
+      const framed = buffer.length >= 8 && buffer[0] <= 2 && buffer[1] === 0 && buffer[2] === 0 && buffer[3] === 0;
+      const messages = framed
+        ? new DockerLogFrameParser().push(buffer).map(frame => frame.message)
+        : [stripAnsiCodes(buffer.toString("utf8"))];
+
+      return messages
+        .flatMap(message => message.split("\n"))
         .map(line => line.trimEnd().slice(0, FAILED_CONTAINER_LOG_LINE_MAX))
         .filter(line => line !== "")
         .slice(-FAILED_CONTAINER_LOG_TAIL);

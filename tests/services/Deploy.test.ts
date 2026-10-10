@@ -129,6 +129,39 @@ describe("DeployService", () => {
     expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back", containerLogs: [] }));
   });
 
+  it("reports plain-text output from a container started with a TTY", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const getContainerLogs = vi.fn().mockResolvedValue(Buffer.from("booting\r\n\u001b[31mFATAL: missing APP_KEY\u001b[0m\r\n"));
+    const docker = makeDocker({ getContainerLogs });
+
+    await new DeployService(docker as never).deploy(baseOptions({ health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }));
+
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rolled_back", containerLogs: ["booting", "FATAL: missing APP_KEY"] }),
+    );
+  });
+
+  it("reports the new container's output when the deploy throws after it was created", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const getContainerLogs = vi.fn().mockResolvedValue(logFrame(2, "migration failed\n"));
+    const running = { State: { Status: "running", Running: true, Restarting: false }, NetworkSettings: { Networks: { traefik: { IPAddress: "172.20.0.5" } } } };
+    // Healthy while the probe runs, then the final inspect after it throws.
+    const getContainer = vi.fn().mockImplementation(async () => {
+      if (fetchMock.mock.calls.length > 0) throw new Error("inspect failed");
+
+      return running;
+    });
+    const docker = makeDocker({ getContainerLogs, getContainer });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(getContainerLogs).toHaveBeenCalledWith("new-container-000000000000", { tail: 200 });
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", error: "inspect failed", containerLogs: ["migration failed"] }),
+    );
+  });
+
   it("recreate: stops the old container before creating the new one, removes it only once healthy", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const docker = makeDocker();
