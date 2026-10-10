@@ -25,6 +25,15 @@ function makeDocker(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function logFrame(stream: 1 | 2, text: string): Buffer {
+  const body = Buffer.from(text);
+  const header = Buffer.alloc(8);
+  header[0] = stream;
+  header.writeUInt32BE(body.length, 4);
+
+  return Buffer.concat([header, body]);
+}
+
 function baseOptions(over: Partial<DeployOptions> = {}): DeployOptions {
   return {
     deploymentId: "dep_1",
@@ -93,6 +102,31 @@ describe("DeployService", () => {
         discarded: ["new-container-000000000000"],
       }),
     );
+  });
+
+  it("an unhealthy new container's output is captured before it is discarded and reported as containerLogs", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const getContainerLogs = vi
+      .fn()
+      .mockResolvedValue(Buffer.concat([logFrame(1, "booting\nlistening on 8000\n"), logFrame(2, "\u001b[31mFATAL: missing APP_KEY\u001b[0m\n")]));
+    const docker = makeDocker({ getContainerLogs });
+
+    await new DeployService(docker as never).deploy(baseOptions({ health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }));
+
+    expect(getContainerLogs).toHaveBeenCalledWith("new-container-000000000000", { tail: 200 });
+    expect(getContainerLogs.mock.invocationCallOrder[0]).toBeLessThan(docker.removeContainer.mock.invocationCallOrder[0]);
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rolled_back", containerLogs: ["booting", "listening on 8000", "FATAL: missing APP_KEY"] }),
+    );
+  });
+
+  it("reports empty containerLogs when the new container's logs cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const docker = makeDocker({ getContainerLogs: vi.fn().mockRejectedValue(new Error("no such container")) });
+
+    await new DeployService(docker as never).deploy(baseOptions({ health: { path: "/up", port: 8000, timeoutSeconds: 0, intervalSeconds: 1 } }));
+
+    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back", containerLogs: [] }));
   });
 
   it("recreate: stops the old container before creating the new one, removes it only once healthy", async () => {
