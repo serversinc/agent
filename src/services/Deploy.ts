@@ -1,11 +1,13 @@
 import { httpService } from "./Http";
 import { DockerService } from "./Docker";
-import { demultiplexDockerStream, stripAnsiCodes } from "../utils/transformers";
+import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser } from "../utils/transformers";
 import { info, warn, error as logError } from "../utils/console";
 
 const DEFAULT_STOP_GRACE_SECONDS = 140;
 const RUNNING_GRACE_MS = 3000;
 const REPORT_BACKOFF_MS = [1000, 2000, 4000, 8000];
+const FAILED_CONTAINER_LOG_TAIL = 200;
+const FAILED_CONTAINER_LOG_LINE_MAX = 2000;
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -66,6 +68,14 @@ export class DeployService {
     let retired: string[] = [];
     const discarded: string[] = [];
 
+    // Output of the new container when it failed its health check, captured
+    // before it is discarded so the failure can be diagnosed afterwards.
+    let containerLogs: string[] = [];
+
+    // Set once the new container exists, so a throw after creation can still
+    // read its output.
+    let newContainerId: string | null = null;
+
     // `recreate` stops the retire set up front to free its ports/volumes, then
     // removes it only once the new container is healthy. Until then the old
     // containers are a stopped standby we can start again if the deploy fails.
@@ -89,7 +99,7 @@ export class DeployService {
       }
 
       log("Creating new container");
-      const newContainerId = await this.createContainer(options.container, log);
+      newContainerId = await this.createContainer(options.container, log);
 
       const healthy = options.health
         ? await this.waitForHealthy(newContainerId, options.health, log)
@@ -97,6 +107,7 @@ export class DeployService {
 
       if (!healthy) {
         log("New container did not become healthy — rolling back");
+        containerLogs = await this.captureLogs(newContainerId);
         if (await this.discard(newContainerId, log)) {
           discarded.push(newContainerId);
         }
@@ -108,10 +119,10 @@ export class DeployService {
             ? "new container failed its health check; previous container restored"
             : "new container failed its health check; previous container could not be restored";
 
-          return await this.report(options, status, logs, reason, null, retired, discarded);
+          return await this.report(options, status, logs, reason, null, retired, discarded, containerLogs);
         }
 
-        return await this.report(options, "rolled_back", logs, "new container failed its health check", null, retired, discarded);
+        return await this.report(options, "rolled_back", logs, "new container failed its health check", null, retired, discarded, containerLogs);
       }
 
       if (options.strategy === "recreate") {
@@ -138,10 +149,14 @@ export class DeployService {
         await this.restoreRetired(options, log);
       }
 
+      if (newContainerId !== null) {
+        containerLogs = await this.captureLogs(newContainerId);
+      }
+
       // Only `retired` (containers we definitely removed) is reported here.
       // A new container created before the throw may still be running — its
       // fate is left to Core's periodic container reconciliation.
-      return await this.report(options, "failed", logs, message, null, retired, discarded);
+      return await this.report(options, "failed", logs, message, null, retired, discarded, containerLogs);
     }
   }
 
@@ -323,6 +338,31 @@ export class DeployService {
     return allRunning;
   }
 
+  // Last lines the container wrote, oldest first. Best-effort: a container
+  // that is already gone yields an empty list rather than failing the deploy.
+  private async captureLogs(id: string): Promise<string[]> {
+    try {
+      const buffer = await this.docker.getContainerLogs(id, { tail: FAILED_CONTAINER_LOG_TAIL });
+
+      // A container started with a TTY returns plain text, not multiplexed
+      // frames. Frame headers start with a stream byte (0-2) then three zero bytes.
+      const framed = buffer.length >= 8 && buffer[0] <= 2 && buffer[1] === 0 && buffer[2] === 0 && buffer[3] === 0;
+      const messages = framed
+        ? new DockerLogFrameParser().push(buffer).map(frame => frame.message)
+        : [stripAnsiCodes(buffer.toString("utf8"))];
+
+      return messages
+        .flatMap(message => message.split("\n"))
+        .map(line => line.trimEnd().slice(0, FAILED_CONTAINER_LOG_LINE_MAX))
+        .filter(line => line !== "")
+        .slice(-FAILED_CONTAINER_LOG_TAIL);
+    } catch (err) {
+      warn(this.name, "Failed to read logs of the new container", { id, error: (err as Error).message });
+
+      return [];
+    }
+  }
+
   private async discard(id: string, log: (line: string) => void): Promise<boolean> {
     log(`Discarding new container ${id.slice(0, 12)}`);
 
@@ -399,6 +439,7 @@ export class DeployService {
     container: unknown = null,
     retired: string[] = [],
     discarded: string[] = [],
+    containerLogs: string[] = [],
   ): Promise<void> {
     const payload = {
       type: "deployment_status",
@@ -409,6 +450,7 @@ export class DeployService {
       container,
       retired,
       discarded,
+      containerLogs,
     };
 
     for (let attempt = 0; attempt <= REPORT_BACKOFF_MS.length; attempt++) {
