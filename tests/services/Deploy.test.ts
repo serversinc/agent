@@ -322,7 +322,9 @@ describe("DeployService", () => {
 
     expect(docker.stopContainer).toHaveBeenCalledWith("new-container-000000000000", 10);
     expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
-    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back" }));
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "rolled_back", error: "new container did not stay running" }),
+    );
   });
 
   it("with no health check, waits running_seconds before accepting the container", async () => {

@@ -109,7 +109,8 @@ export class DeployService {
         : await this.waitForRunning(newContainerId, options.runningSeconds ?? DEFAULT_RUNNING_SECONDS, log);
 
       if (!healthy) {
-        log("New container did not become healthy — rolling back");
+        const failure = options.health ? "failed its health check" : "did not stay running";
+        log(`New container ${failure} — rolling back`);
         containerLogs = await this.captureLogs(newContainerId);
         if (await this.discard(newContainerId, log)) {
           discarded.push(newContainerId);
@@ -119,13 +120,13 @@ export class DeployService {
           const restored = await this.restoreRetired(options, log);
           const status: DeployStatus = restored ? "rolled_back" : "failed";
           const reason = restored
-            ? "new container failed its health check; previous container restored"
-            : "new container failed its health check; previous container could not be restored";
+            ? `new container ${failure}; previous container restored`
+            : `new container ${failure}; previous container could not be restored`;
 
           return await this.report(options, status, logs, reason, null, retired, discarded, containerLogs);
         }
 
-        return await this.report(options, "rolled_back", logs, "new container failed its health check", null, retired, discarded, containerLogs);
+        return await this.report(options, "rolled_back", logs, `new container ${failure}`, null, retired, discarded, containerLogs);
       }
 
       if (options.strategy === "recreate") {
