@@ -20,12 +20,14 @@ describe("containerIdentity", () => {
       application_id: "app-1",
       environment_id: "env-1",
       deployment_id: "dep-1",
+      application_process_id: null,
       workload_role: null,
     });
     expect(identityFromEnv(undefined)).toEqual({
       application_id: null,
       environment_id: null,
       deployment_id: null,
+      application_process_id: null,
       workload_role: null,
     });
   });
@@ -36,6 +38,7 @@ describe("containerIdentity", () => {
         [MANAGED_LABEL_KEYS.applicationId]: "app-1",
         [MANAGED_LABEL_KEYS.environmentId]: "env-1",
         [MANAGED_LABEL_KEYS.deploymentId]: "dep-1",
+        [MANAGED_LABEL_KEYS.applicationProcessId]: "proc-1",
         [MANAGED_LABEL_KEYS.workloadRole]: "prestep",
         "traefik.enable": "true",
       }),
@@ -43,12 +46,14 @@ describe("containerIdentity", () => {
       application_id: "app-1",
       environment_id: "env-1",
       deployment_id: "dep-1",
+      application_process_id: "proc-1",
       workload_role: "prestep",
     });
     expect(identityFromLabels(null)).toEqual({
       application_id: null,
       environment_id: null,
       deployment_id: null,
+      application_process_id: null,
       workload_role: null,
     });
   });

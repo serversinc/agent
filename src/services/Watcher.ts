@@ -295,6 +295,10 @@ export class WatcherService {
         deployment_id: fromLabels.deployment_id ?? fromEnv.deployment_id,
       };
 
+      if (fromLabels.application_process_id) {
+        payload.attributes.application_process_id = fromLabels.application_process_id;
+      }
+
       if (fromLabels.workload_role) {
         payload.attributes.workload_role = fromLabels.workload_role;
       }
@@ -331,6 +335,10 @@ export class WatcherService {
 
     if (identity.deployment_id !== null) {
       attributes.deployment_id = identity.deployment_id;
+    }
+
+    if (identity.application_process_id !== null) {
+      attributes.application_process_id = identity.application_process_id;
     }
 
     if (identity.workload_role !== null) {

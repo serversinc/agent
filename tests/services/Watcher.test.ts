@@ -353,6 +353,85 @@ describe("WatcherService", () => {
     expect(forwardedPayloads()[0].attributes.workload_role).toBe("prestep");
   });
 
+  it("forwards the application process label on a container create", async () => {
+    const labels = { ...managedLabels, [MANAGED_LABEL_KEYS.applicationProcessId]: "proc-1" };
+    mockDockerService.getContainer = vi.fn().mockResolvedValue({
+      Id: "worker1",
+      Name: "/app-worker-1",
+      Config: { Image: "app:1", Env: [], Labels: labels },
+      State: { Status: "created" },
+      Created: "2026-01-01T00:00:00Z",
+    });
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await flush();
+
+    emitEvent(stream, {
+      Type: "container",
+      Action: "create",
+      Actor: { ID: "worker1", Attributes: labels },
+      time: 1_700_000_000,
+      timeNano: 1_700_000_000_100_000_004,
+    });
+    await flush();
+
+    expect(forwardedPayloads()[0].attributes).toMatchObject({
+      application_id: "app-1",
+      application_process_id: "proc-1",
+      workload_role: "runtime",
+    });
+  });
+
+  it("forwards the application process label from event attributes when the inspect fails", async () => {
+    mockDockerService.getContainer = vi.fn().mockRejectedValue(new Error("No such container"));
+    const labels = { ...managedLabels, [MANAGED_LABEL_KEYS.applicationProcessId]: "proc-1" };
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await flush();
+
+    emitEvent(stream, {
+      Type: "container",
+      Action: "create",
+      Actor: { ID: "worker1", Attributes: { ...labels, image: "app:1" } },
+      time: 1_700_000_000,
+      timeNano: 1_700_000_000_100_000_005,
+    });
+    await flush();
+
+    expect(forwardedPayloads()[0].attributes).toMatchObject({
+      application_id: "app-1",
+      application_process_id: "proc-1",
+    });
+  });
+
+  it("forwards the application process label on start/die/destroy without inspecting", async () => {
+    const labels = { ...managedLabels, [MANAGED_LABEL_KEYS.applicationProcessId]: "proc-1" };
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await flush();
+
+    for (const action of ["start", "die", "destroy"]) {
+      emitEvent(stream, {
+        Type: "container",
+        Action: action,
+        Actor: { ID: "worker1", Attributes: labels },
+        time: 1_700_000_000,
+        timeNano: 1_700_000_000_100_000_006,
+      });
+    }
+    await flush();
+
+    expect(mockDockerService.getContainer).not.toHaveBeenCalled();
+    expect(forwardedPayloads().map(p => [p.event, p.attributes.application_process_id])).toEqual([
+      ["start", "proc-1"],
+      ["die", "proc-1"],
+      ["destroy", "proc-1"],
+    ]);
+  });
+
   it("never forwards container environment secrets", async () => {
     mockDockerService.getContainer = vi.fn().mockResolvedValue({
       Id: "abc123",
