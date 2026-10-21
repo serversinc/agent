@@ -306,10 +306,49 @@ describe("DeployService", () => {
     const docker = makeDocker();
 
     const pending = new DeployService(docker as never).deploy(baseOptions({ health: undefined, retire: [] }));
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(postMock).not.toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+
+    await vi.advanceTimersByTimeAsync(1_000);
     await pending;
 
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        logs: expect.arrayContaining([expect.stringContaining("verifying the container stays running for 3s")]),
+      }),
+    );
+  });
+
+  it("with no health check, measures running_seconds against the clock when inspects are slow", async () => {
+    vi.useFakeTimers();
+    const running = { State: { Running: true, Restarting: false } };
+    const getContainer = vi.fn(() => new Promise(resolve => setTimeout(() => resolve(running), 500)));
+    const docker = makeDocker({ getContainer });
+
+    const pending = new DeployService(docker as never).deploy(
+      baseOptions({ health: undefined, runningSeconds: 3, retire: [] }),
+    );
+    await vi.advanceTimersByTimeAsync(3_500);
+    await pending;
+
+    expect(getContainer).toHaveBeenCalledTimes(3);
     expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+
+  it("logs that running_seconds is ignored when a health check is configured", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker();
+
+    await new DeployService(docker as never).deploy(baseOptions({ runningSeconds: 30, retire: [] }));
+
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        logs: expect.arrayContaining([expect.stringContaining("ignoring running_seconds")]),
+      }),
+    );
   });
 
   it("with no health check, rolls back a container that is not running", async () => {

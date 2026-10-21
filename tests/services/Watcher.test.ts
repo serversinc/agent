@@ -406,6 +406,32 @@ describe("WatcherService", () => {
     });
   });
 
+  it("forwards the application process label on start/die/destroy without inspecting", async () => {
+    const labels = { ...managedLabels, [MANAGED_LABEL_KEYS.applicationProcessId]: "proc-1" };
+
+    const watcher = new WatcherService(mockDockerService);
+    watcher.start();
+    await flush();
+
+    for (const action of ["start", "die", "destroy"]) {
+      emitEvent(stream, {
+        Type: "container",
+        Action: action,
+        Actor: { ID: "worker1", Attributes: labels },
+        time: 1_700_000_000,
+        timeNano: 1_700_000_000_100_000_006,
+      });
+    }
+    await flush();
+
+    expect(mockDockerService.getContainer).not.toHaveBeenCalled();
+    expect(forwardedPayloads().map(p => [p.event, p.attributes.application_process_id])).toEqual([
+      ["start", "proc-1"],
+      ["die", "proc-1"],
+      ["destroy", "proc-1"],
+    ]);
+  });
+
   it("never forwards container environment secrets", async () => {
     mockDockerService.getContainer = vi.fn().mockResolvedValue({
       Id: "abc123",

@@ -104,6 +104,10 @@ export class DeployService {
       log("Creating new container");
       newContainerId = await this.createContainer(options.container, log);
 
+      if (options.health && options.runningSeconds !== undefined) {
+        log("A health check is configured — ignoring running_seconds");
+      }
+
       const healthy = options.health
         ? await this.waitForHealthy(newContainerId, options.health, log)
         : await this.waitForRunning(newContainerId, options.runningSeconds ?? DEFAULT_RUNNING_SECONDS, log);
@@ -245,17 +249,22 @@ export class DeployService {
   }
 
   /**
-   * Check once a second that the container is running, for `seconds` seconds.
-   * A container that exits or restarts at any check fails at once.
+   * Check about once a second that the container is running, until `seconds`
+   * seconds have passed. The window is measured against the clock, so slow
+   * inspects do not make it longer. A container that exits or restarts at any
+   * check fails at once.
    */
   private async waitForRunning(id: string, seconds: number, log: (line: string) => void): Promise<boolean> {
     log(`No health check configured — verifying the container stays running for ${seconds}s`);
 
-    for (let elapsed = 0; elapsed < seconds; elapsed++) {
-      await sleep(1000);
+    const startedAt = Date.now();
+    const deadline = startedAt + seconds * 1000;
+
+    while (Date.now() < deadline) {
+      await sleep(Math.min(1000, deadline - Date.now()));
 
       if (!(await this.isRunning(id))) {
-        log(`New container stopped running after ${elapsed + 1}s`);
+        log(`New container stopped running after ${Math.round((Date.now() - startedAt) / 1000)}s`);
 
         return false;
       }
