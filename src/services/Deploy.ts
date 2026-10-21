@@ -4,7 +4,9 @@ import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser } from ".
 import { info, warn, error as logError } from "../utils/console";
 
 const DEFAULT_STOP_GRACE_SECONDS = 140;
-const RUNNING_GRACE_MS = 3000;
+// Without a health check, how long a new container must stay running before
+// the swap continues, unless the request sets `running_seconds`.
+const DEFAULT_RUNNING_SECONDS = 3;
 const REPORT_BACKOFF_MS = [1000, 2000, 4000, 8000];
 const FAILED_CONTAINER_LOG_TAIL = 200;
 const FAILED_CONTAINER_LOG_LINE_MAX = 2000;
@@ -38,6 +40,7 @@ export interface DeployOptions {
   strategy: "rolling" | "recreate";
   container: DeployContainerOptions;
   health?: DeployHealthCheck;
+  runningSeconds?: number;
   retire: string[];
   stopGraceSeconds?: number;
   prestep?: { run: boolean; command: string[]; labels?: Record<string, string> };
@@ -103,7 +106,7 @@ export class DeployService {
 
       const healthy = options.health
         ? await this.waitForHealthy(newContainerId, options.health, log)
-        : await this.waitForRunning(newContainerId, log);
+        : await this.waitForRunning(newContainerId, options.runningSeconds ?? DEFAULT_RUNNING_SECONDS, log);
 
       if (!healthy) {
         log("New container did not become healthy — rolling back");
@@ -240,10 +243,27 @@ export class DeployService {
     return false;
   }
 
-  private async waitForRunning(id: string, log: (line: string) => void): Promise<boolean> {
-    log("No health check configured — verifying the container stays running");
-    await sleep(RUNNING_GRACE_MS);
+  /**
+   * Check once a second that the container is running, for `seconds` seconds.
+   * A container that exits or restarts at any check fails at once.
+   */
+  private async waitForRunning(id: string, seconds: number, log: (line: string) => void): Promise<boolean> {
+    log(`No health check configured — verifying the container stays running for ${seconds}s`);
 
+    for (let elapsed = 0; elapsed < seconds; elapsed++) {
+      await sleep(1000);
+
+      if (!(await this.isRunning(id))) {
+        log(`New container stopped running after ${elapsed + 1}s`);
+
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private async isRunning(id: string): Promise<boolean> {
     try {
       const inspect = await this.docker.getContainer(id);
 

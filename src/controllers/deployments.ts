@@ -19,6 +19,7 @@ interface DeploymentRequestBody {
     timeout_s?: number;
     interval_s?: number;
   };
+  running_seconds?: number;
   retire?: string[];
   stop_grace_seconds?: number;
   prestep?: {
@@ -58,6 +59,7 @@ function normalise(body: DeploymentRequestBody): DeployOptions {
           intervalSeconds: body.health.interval_s ?? 3,
         }
       : undefined,
+    runningSeconds: body.running_seconds,
     retire: body.retire ?? [],
     stopGraceSeconds: body.stop_grace_seconds,
     prestep: body.prestep

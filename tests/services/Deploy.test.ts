@@ -325,6 +325,47 @@ describe("DeployService", () => {
     expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back" }));
   });
 
+  it("with no health check, waits running_seconds before accepting the container", async () => {
+    vi.useFakeTimers();
+    const docker = makeDocker();
+
+    const pending = new DeployService(docker as never).deploy(
+      baseOptions({ health: undefined, runningSeconds: 10, retire: [] }),
+    );
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    expect(postMock).not.toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+
+  it("with no health check, rolls back a container that exits within running_seconds", async () => {
+    vi.useFakeTimers();
+    const running = { State: { Running: true, Restarting: false } };
+    const exited = { State: { Running: false, Restarting: false } };
+    const getContainer = vi
+      .fn()
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValue(exited);
+    const docker = makeDocker({ getContainer });
+
+    const pending = new DeployService(docker as never).deploy(baseOptions({ health: undefined, runningSeconds: 10 }));
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(getContainer).toHaveBeenCalledTimes(5);
+    expect(docker.stopContainer).not.toHaveBeenCalledWith("old-container-1", expect.anything());
+    expect(docker.stopContainer).toHaveBeenCalledWith("new-container-000000000000", 10);
+    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "rolled_back" }));
+  });
+
   it("retries the status callback with backoff before giving up", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     postMock.mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce(undefined);

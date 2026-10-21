@@ -18,6 +18,7 @@ export const createDeploymentSchema = z.object({
       interval_s: z.number().int().positive().max(60).default(3),
     })
     .optional(),
+  running_seconds: z.number().int().positive().max(600).optional(),
   retire: z.array(z.string()).default([]),
   stop_grace_seconds: z.number().int().nonnegative().max(600).optional(),
   prestep: z

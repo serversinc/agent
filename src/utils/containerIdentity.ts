@@ -13,6 +13,7 @@ export const MANAGED_LABEL_KEYS = {
   applicationId: `${MANAGED_LABEL_PREFIX}.application_id`,
   environmentId: `${MANAGED_LABEL_PREFIX}.environment_id`,
   deploymentId: `${MANAGED_LABEL_PREFIX}.deployment_id`,
+  applicationProcessId: `${MANAGED_LABEL_PREFIX}.application_process_id`,
   workloadRole: `${MANAGED_LABEL_PREFIX}.workload_role`,
 } as const;
 
@@ -36,6 +37,7 @@ export interface ContainerIdentity {
   application_id: string | null;
   environment_id: string | null;
   deployment_id: string | null;
+  application_process_id: string | null;
   workload_role: string | null;
 }
 
@@ -69,6 +71,7 @@ export function identityFromEnv(env?: readonly string[] | null): ContainerIdenti
     application_id: map.get("CORE_APP_ID") ?? null,
     environment_id: map.get("CORE_ENV_ID") ?? null,
     deployment_id: map.get("CORE_DEPLOYMENT_ID") ?? null,
+    application_process_id: null,
     workload_role: null,
   };
 }
@@ -80,6 +83,7 @@ export function identityFromLabels(labels?: Record<string, string> | null): Cont
       application_id: null,
       environment_id: null,
       deployment_id: null,
+      application_process_id: null,
       workload_role: null,
     };
   }
@@ -88,6 +92,7 @@ export function identityFromLabels(labels?: Record<string, string> | null): Cont
     application_id: labels[MANAGED_LABEL_KEYS.applicationId] ?? null,
     environment_id: labels[MANAGED_LABEL_KEYS.environmentId] ?? null,
     deployment_id: labels[MANAGED_LABEL_KEYS.deploymentId] ?? null,
+    application_process_id: labels[MANAGED_LABEL_KEYS.applicationProcessId] ?? null,
     workload_role: normalizeWorkloadRole(labels[MANAGED_LABEL_KEYS.workloadRole]),
   };
 }

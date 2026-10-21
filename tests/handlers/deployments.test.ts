@@ -87,6 +87,23 @@ describe("Deployment Handlers", () => {
     expect(options.prestep).toEqual({ run: true, command: ["true"], labels: prestepLabels });
   });
 
+  it("passes an optional running_seconds through as runningSeconds", async () => {
+    await request(server)
+      .post("/deployments")
+      .send({ ...payload, running_seconds: 30 });
+
+    expect(mockDeployService.deploy).toHaveBeenCalledWith(expect.objectContaining({ runningSeconds: 30 }));
+  });
+
+  it("rejects a running_seconds above the 600s ceiling", async () => {
+    const response = await request(server)
+      .post("/deployments")
+      .send({ ...payload, running_seconds: 601 });
+
+    expect(response.status).toBe(400);
+    expect(mockDeployService.deploy).not.toHaveBeenCalled();
+  });
+
   it("rejects a stop_grace_seconds above the 600s ceiling", async () => {
     const response = await request(server)
       .post("/deployments")
