@@ -9,6 +9,11 @@ vi.mock("../../src/config", () => ({ default: { PORT: 7567 } }));
 const { postSafeMock } = vi.hoisted(() => ({ postSafeMock: vi.fn().mockResolvedValue(true) }));
 vi.mock("../../src/services/Http", () => ({ httpService: { postSafe: postSafeMock } }));
 
+const IMAGE = `ghcr.io/serversinc/agent@sha256:${"a".repeat(64)}`;
+const IMAGE_B = `ghcr.io/serversinc/agent@sha256:${"b".repeat(64)}`;
+const IMAGE_C = `ghcr.io/serversinc/agent@sha256:${"c".repeat(64)}`;
+const IMAGE_OLD = `ghcr.io/serversinc/agent@sha256:${"d".repeat(64)}`;
+
 function makeDocker(overrides: Record<string, unknown> = {}) {
   return {
     getContainer: vi.fn().mockResolvedValue({
@@ -47,12 +52,62 @@ describe("SelfUpdateService", () => {
     vi.unstubAllGlobals();
   });
 
+  describe("image allowlist", () => {
+    const rejected = [
+      ["another repository", `ghcr.io/acme/agent@sha256:${"a".repeat(64)}`],
+      ["another registry", `docker.io/serversinc/agent@sha256:${"a".repeat(64)}`],
+      ["a lookalike registry host", `ghcr.io.evil.example/serversinc/agent@sha256:${"a".repeat(64)}`],
+      ["a repository with the agent name as a prefix", `ghcr.io/serversinc/agent-evil@sha256:${"a".repeat(64)}`],
+      ["a tag without a digest", "ghcr.io/serversinc/agent:2.0.0"],
+      ["no tag and no digest", "ghcr.io/serversinc/agent"],
+      ["a tag and a digest", `ghcr.io/serversinc/agent:2.0.0@sha256:${"a".repeat(64)}`],
+      ["a short digest", "ghcr.io/serversinc/agent@sha256:abc123"],
+      ["an uppercase digest", `ghcr.io/serversinc/agent@sha256:${"A".repeat(64)}`],
+      ["text after the digest", `ghcr.io/serversinc/agent@sha256:${"a".repeat(64)} --privileged`],
+    ] as const;
+
+    it.each(rejected)("does not schedule an update for %s", (_name, image) => {
+      const scheduleFn = vi.fn();
+      const service = makeService(makeDocker(), { scheduleFn });
+
+      for (let i = 0; i < 3; i++) {
+        service.onHeartbeatTarget({ target_version: "2.0.0", target_image: image });
+      }
+
+      expect(scheduleFn).toHaveBeenCalledTimes(0);
+    });
+
+    it.each(rejected)("beginUpdate refuses %s and pulls nothing, creates nothing and reports no update", async (_name, image) => {
+      const docker = makeDocker();
+      const service = makeService(docker);
+
+      await expect(service.beginUpdate({ version: "2.0.0", image })).rejects.toThrow(
+        "Refusing to self-update: image is not ghcr.io/serversinc/agent@sha256:<digest>",
+      );
+
+      expect(docker.pullImage).toHaveBeenCalledTimes(0);
+      expect(docker.createContainer).toHaveBeenCalledTimes(0);
+      expect(postSafeMock).toHaveBeenCalledTimes(0);
+    });
+
+    it("schedules an update for the agent image pinned by digest", () => {
+      const scheduleFn = vi.fn();
+      const service = makeService(makeDocker(), { scheduleFn });
+
+      for (let i = 0; i < 3; i++) {
+        service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
+      }
+
+      expect(scheduleFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("debounce + jitter gating", () => {
     it("does not act on a single heartbeat reporting a new target", () => {
       const docker = makeDocker();
       const service = makeService(docker);
 
-      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
+      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
 
       expect(docker.createContainer).not.toHaveBeenCalled();
     });
@@ -61,9 +116,9 @@ describe("SelfUpdateService", () => {
       const docker = makeDocker();
       const service = makeService(docker);
 
-      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
-      service.onHeartbeatTarget({ target_version: "2.0.1", target_image: "ghcr.io/acme/agent:2.0.1" });
-      service.onHeartbeatTarget({ target_version: "2.0.2", target_image: "ghcr.io/acme/agent:2.0.2" });
+      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
+      service.onHeartbeatTarget({ target_version: "2.0.1", target_image: IMAGE_B });
+      service.onHeartbeatTarget({ target_version: "2.0.2", target_image: IMAGE_C });
 
       expect(docker.createContainer).not.toHaveBeenCalled();
     });
@@ -72,9 +127,9 @@ describe("SelfUpdateService", () => {
       const docker = makeDocker();
       const service = makeService(docker);
 
-      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: "ghcr.io/acme/agent:1.0.0" });
-      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: "ghcr.io/acme/agent:1.0.0" });
-      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: "ghcr.io/acme/agent:1.0.0" });
+      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: IMAGE_OLD });
+      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: IMAGE_OLD });
+      service.onHeartbeatTarget({ target_version: "1.0.0", target_image: IMAGE_OLD });
 
       expect(docker.createContainer).not.toHaveBeenCalled();
     });
@@ -85,11 +140,11 @@ describe("SelfUpdateService", () => {
       const scheduleFn = vi.fn((fn: () => void) => fn());
       const service = makeService(docker, { jitterMs, scheduleFn });
 
-      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
-      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
+      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
+      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
       expect(scheduleFn).not.toHaveBeenCalled();
 
-      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
+      service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
 
       expect(scheduleFn).toHaveBeenCalledWith(expect.any(Function), 1234);
       await vi.waitFor(() => expect(docker.createContainer).toHaveBeenCalledTimes(1));
@@ -100,7 +155,7 @@ describe("SelfUpdateService", () => {
       const service = makeService(docker);
 
       for (let i = 0; i < 6; i++) {
-        service.onHeartbeatTarget({ target_version: "2.0.0", target_image: "ghcr.io/acme/agent:2.0.0" });
+        service.onHeartbeatTarget({ target_version: "2.0.0", target_image: IMAGE });
       }
 
       await vi.waitFor(() => expect(docker.createContainer).toHaveBeenCalledTimes(1));
@@ -112,11 +167,11 @@ describe("SelfUpdateService", () => {
       const docker = makeDocker();
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.createContainer).toHaveBeenCalledWith(
         expect.objectContaining({
-          Image: "ghcr.io/acme/agent:2.0.0",
+          Image: IMAGE,
           Env: ["A=1"],
           Labels: expect.objectContaining({ "traefik.enable": "true", [SelfUpdateService.ROLE_LABEL]: SelfUpdateService.ROLE_VALUE }),
           HostConfig: { Binds: ["/agent:/agent"], Privileged: true, PidMode: "host" },
@@ -138,7 +193,7 @@ describe("SelfUpdateService", () => {
       });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.createContainer).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -157,7 +212,7 @@ describe("SelfUpdateService", () => {
       });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.createContainer).toHaveBeenCalledWith(expect.objectContaining({ Env: ["A=1", "B=2"] }));
     });
@@ -166,9 +221,9 @@ describe("SelfUpdateService", () => {
       const docker = makeDocker({ checkImageExists: vi.fn().mockResolvedValue(false) });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
-      expect(docker.pullImage).toHaveBeenCalledWith("ghcr.io/acme/agent:2.0.0");
+      expect(docker.pullImage).toHaveBeenCalledWith(IMAGE);
     });
   });
 
@@ -290,7 +345,7 @@ describe("SelfUpdateService", () => {
       });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.removeContainer).toHaveBeenCalledWith("sibling-000000000000", true);
     });
@@ -304,7 +359,7 @@ describe("SelfUpdateService", () => {
       });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.removeContainer).not.toHaveBeenCalled();
     });
@@ -318,7 +373,7 @@ describe("SelfUpdateService", () => {
       });
       const service = makeService(docker);
 
-      await service.beginUpdate({ version: "2.0.0", image: "ghcr.io/acme/agent:2.0.0" });
+      await service.beginUpdate({ version: "2.0.0", image: IMAGE });
 
       expect(docker.removeContainer).not.toHaveBeenCalled();
     });

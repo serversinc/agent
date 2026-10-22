@@ -3,6 +3,7 @@ import { DockerService } from "./Docker";
 import { httpService } from "./Http";
 import { heartbeatService, type HeartbeatAgentUpdate } from "./HeartbeatService";
 import { info, warn, error as logError } from "../utils/console";
+import { isAllowedAgentImage, AGENT_IMAGE_REPOSITORY } from "../utils/agentImage";
 import config from "../config";
 
 interface UpdateTarget {
@@ -48,6 +49,17 @@ export class SelfUpdateService {
       return;
     }
 
+    if (!isAllowedAgentImage(agent.target_image)) {
+      warn(this.name, "Ignoring target image outside the agent image allowlist", {
+        allowed: `${AGENT_IMAGE_REPOSITORY}@sha256:<digest>`,
+        image: agent.target_image,
+      });
+      this.pendingTarget = null;
+      this.consecutiveMatches = 0;
+
+      return;
+    }
+
     if (this.pendingTarget?.version === agent.target_version) {
       this.consecutiveMatches += 1;
     } else {
@@ -72,6 +84,10 @@ export class SelfUpdateService {
   }
 
   async beginUpdate(target: UpdateTarget): Promise<void> {
+    if (!isAllowedAgentImage(target.image)) {
+      throw new Error(`Refusing to self-update: image is not ${AGENT_IMAGE_REPOSITORY}@sha256:<digest>`);
+    }
+
     info(this.name, "Beginning self-update", { target });
     await this.reportUpdate("agent_update_started", { target_version: target.version });
 
