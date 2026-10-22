@@ -59,6 +59,15 @@ describe("SecurityChecks", () => {
       expect(parseAptUpgrades(output)).toEqual({ total: 1, security: 0 });
     });
 
+    it("counts a security upgrade by its origin, not by the package name", () => {
+      const output = [
+        "Inst libsecurity-foo [1.0] (1.1 Ubuntu:22.04/jammy-updates [amd64])",
+        "Inst openssl [3.0.2-0ubuntu1.7] (3.0.2-0ubuntu1.10 Ubuntu:22.04/jammy-security [amd64])",
+      ].join("\n");
+
+      expect(parseAptUpgrades(output)).toEqual({ total: 2, security: 1 });
+    });
+
     it("returns zero counts when nothing is upgraded", () => {
       const output = [
         "Calculating upgrade...",
@@ -81,7 +90,7 @@ describe("SecurityChecks", () => {
         status: "bad",
         detail: { total: 3, security: 2 },
       });
-      expect(mockRunHost).toHaveBeenCalledWith("sh -c 'apt-get -s -q dist-upgrade 2>/dev/null || true'");
+      expect(mockRunHost).toHaveBeenCalledWith("apt-get -s -q dist-upgrade", { timeout: 30000 });
     });
 
     it("reports good when the system is fully patched", () => {

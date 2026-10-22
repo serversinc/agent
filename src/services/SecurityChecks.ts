@@ -126,12 +126,17 @@ export function parseAptUpgrades(output: string): { total: number; security: num
   let total = 0;
   let security = 0;
   for (const line of output.split("\n")) {
-    if (!/^Inst\s+\S+\s+\[[^\]]+\]/.test(line)) continue;
+    const match = line.match(/^Inst\s+\S+\s+\[[^\]]+\]\s+\((.*)\)/);
+    if (!match) continue;
     total += 1;
-    if (/security/i.test(line)) security += 1;
+    if (/security/i.test(match[1])) security += 1;
   }
   return { total, security };
 }
+
+// A simulated dist-upgrade reads every package list, which outlasts the default
+// 5s host timeout on small or loaded servers.
+const OS_UPDATES_TIMEOUT_MS = 30000;
 
 export function checkOsUpdates(): StateCheckResult {
   try {
@@ -139,7 +144,7 @@ export function checkOsUpdates(): StateCheckResult {
     if (!hasApt) {
       return { check_key: "os_updates", status: "unknown", detail: null };
     }
-    const output = runHost("sh -c 'apt-get -s -q dist-upgrade 2>/dev/null || true'");
+    const output = runHost("apt-get -s -q dist-upgrade", { timeout: OS_UPDATES_TIMEOUT_MS });
     const { total, security } = parseAptUpgrades(output);
     return { check_key: "os_updates", status: total > 0 ? "bad" : "good", detail: { total, security } };
   } catch {

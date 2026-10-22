@@ -12,8 +12,8 @@ import { execSync, execFileSync } from "child_process";
 const NSENTER = "nsenter -t 1 -m -u -i -n -p --";
 const NSENTER_ARGS = ["-t", "1", "-m", "-u", "-i", "-n", "-p", "--"];
 
-export function runHost(cmd: string): string {
-  return execSync(`${NSENTER} ${cmd}`, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+export function runHost(cmd: string, options: { timeout?: number } = {}): string {
+  return execSync(`${NSENTER} ${cmd}`, { encoding: "utf8", timeout: options.timeout ?? 5000, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
 /**
