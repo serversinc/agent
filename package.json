@@ -31,7 +31,7 @@
     "@types/node": "^26.6.4",
     "@types/supertest": "^6.0.3",
     "@vitest/coverage-v8": "^4.0.18",
-    "@vitest/ui": "^4.0.18",
+    "@vitest/ui": "^5.0.3",
     "nodemon": "^3.1.9",
     "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
