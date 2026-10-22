@@ -6,6 +6,7 @@ import { DockerService } from "../services/Docker";
 import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
 import { pathParam } from "../utils/params";
+import { redactInspect } from "../utils/redactInspect";
 
 interface CreateContainerOptions {
   name: string;
@@ -48,7 +49,7 @@ export function createContainerHandlers(dockerService: DockerService) {
       const id = pathParam(ctx, "id");
       const container = await dockerService.getContainer(id);
       info("Container", "Fetched container", { id });
-      return ctx.json(container);
+      return ctx.json(redactInspect(container));
     } catch (err) {
       return handleError(ctx, err, "Container", "get container", { id: pathParam(ctx, "id") });
     }
@@ -104,7 +105,7 @@ export function createContainerHandlers(dockerService: DockerService) {
       return ctx.json({
         success: true,
         message: "container created",
-        container: containerInfo,
+        container: redactInspect(containerInfo),
         containerName: containerInfo.Name,
       });
     } catch (err) {

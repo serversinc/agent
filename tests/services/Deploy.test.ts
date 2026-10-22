@@ -67,6 +67,32 @@ describe("DeployService", () => {
     );
   });
 
+  it("reports the completed container with its environment values redacted", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const docker = makeDocker({
+      getContainer: vi.fn().mockResolvedValue({
+        Id: "new-container-000000000000",
+        Name: "/app-1",
+        Config: { Env: ["A=secret-a", "B=secret-b"] },
+        State: { Status: "running", Running: true, Restarting: false },
+        NetworkSettings: { Networks: { traefik: { IPAddress: "172.20.0.5" } } },
+      }),
+    });
+
+    await new DeployService(docker as never).deploy(baseOptions());
+
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        container: expect.objectContaining({
+          Id: "new-container-000000000000",
+          Name: "/app-1",
+          Config: { Env: ["A=[redacted]", "B=[redacted]"] },
+        }),
+      }),
+    );
+  });
+
   it("uses stopGraceSeconds to override the default stop grace when retiring", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
     const docker = makeDocker();
