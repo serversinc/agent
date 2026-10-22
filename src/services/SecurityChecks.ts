@@ -137,8 +137,11 @@ export function parseAptUpgrades(output: string): { total: number; security: num
 // A simulated dist-upgrade reads every package list, which outlasts the default
 // 5s host timeout on small or loaded servers.
 const OS_UPDATES_TIMEOUT_MS = 30000;
-// How long a collected result is served before the next refresh runs apt again.
+// How long a collected result is served before a refresh runs apt again, unless
+// the caller asks for a younger one.
 const OS_UPDATES_TTL_MS = 60 * 60 * 1000;
+// The longest a result served by `GET /security` may be.
+export const OS_UPDATES_ON_DEMAND_MAX_AGE_MS = 5 * 60 * 1000;
 
 const OS_UPDATES_UNKNOWN: StateCheckResult = { check_key: "os_updates", status: "unknown", detail: null };
 
@@ -161,11 +164,11 @@ async function collectOsUpdates(): Promise<StateCheckResult> {
 
 /**
  * Runs apt without blocking the event loop and stores the result for
- * `checkOsUpdates`. A result younger than the TTL is reused, and concurrent
+ * `checkOsUpdates`. A result younger than `maxAgeMs` is reused, and concurrent
  * calls share one apt run. Never rejects.
  */
-export function refreshOsUpdates(): Promise<void> {
-  if (osUpdatesCache && Date.now() - osUpdatesCache.at < OS_UPDATES_TTL_MS) {
+export function refreshOsUpdates(maxAgeMs: number = OS_UPDATES_TTL_MS): Promise<void> {
+  if (osUpdatesCache && Date.now() - osUpdatesCache.at < maxAgeMs) {
     return Promise.resolve();
   }
   osUpdatesRefresh ??= collectOsUpdates()

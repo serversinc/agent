@@ -144,6 +144,18 @@ describe("SecurityChecks", () => {
       expect(mockRunHostExecAsync).toHaveBeenCalledTimes(1);
     });
 
+    it("runs apt again when the caller needs a result younger than the cached one", async () => {
+      vi.useFakeTimers();
+      mockRunHostExecAsync.mockResolvedValueOnce(UBUNTU_UPGRADE_OUTPUT).mockResolvedValueOnce("");
+
+      await refreshOsUpdates();
+      vi.advanceTimersByTime(6 * 60 * 1000);
+      await refreshOsUpdates(5 * 60 * 1000);
+
+      expect(mockRunHostExecAsync).toHaveBeenCalledTimes(2);
+      expect(checkOsUpdates()).toEqual({ check_key: "os_updates", status: "good", detail: { total: 0, security: 0 } });
+    });
+
     it("reuses the cached result within the hour and runs apt again after it", async () => {
       vi.useFakeTimers();
       mockRunHostExecAsync.mockResolvedValueOnce(UBUNTU_UPGRADE_OUTPUT).mockResolvedValueOnce("");
