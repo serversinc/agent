@@ -8,6 +8,7 @@ import {
 } from "../services/SystemdService";
 import type { ServiceAction } from "../services/SystemdService";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 export function createServiceHandlers(systemdService: SystemdService) {
   if (!systemdService) throw new Error("Systemd service is required");
@@ -31,7 +32,7 @@ export function createServiceHandlers(systemdService: SystemdService) {
 
   async function action(ctx: Context) {
     try {
-      const unit = ctx.req.param("unit");
+      const unit = pathParam(ctx, "unit");
       const { action: serviceAction } = await ctx.req.json<{ action: ServiceAction }>();
       return ctx.json(systemdService.performAction(unit, serviceAction));
     } catch (err) {
@@ -41,7 +42,7 @@ export function createServiceHandlers(systemdService: SystemdService) {
 
   async function journal(ctx: Context) {
     try {
-      const unit = ctx.req.param("unit");
+      const unit = pathParam(ctx, "unit");
       const lines = ctx.req.query("lines") ? Number(ctx.req.query("lines")) : DEFAULT_JOURNAL_LINES;
       const since = ctx.req.query("since") ?? DEFAULT_JOURNAL_SINCE;
       return ctx.json(systemdService.getJournal(unit, lines, since));

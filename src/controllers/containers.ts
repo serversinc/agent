@@ -5,6 +5,7 @@ import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser, DockerLo
 import { DockerService } from "../services/Docker";
 import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 interface CreateContainerOptions {
   name: string;
@@ -44,12 +45,12 @@ export function createContainerHandlers(dockerService: DockerService) {
 
   async function get(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const container = await dockerService.getContainer(id);
       info("Container", "Fetched container", { id });
       return ctx.json(container);
     } catch (err) {
-      return handleError(ctx, err, "Container", "get container", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "get container", { id: pathParam(ctx, "id") });
     }
   }
 
@@ -113,41 +114,41 @@ export function createContainerHandlers(dockerService: DockerService) {
 
   async function remove(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const force = ctx.req.query("force") === "true";
       await dockerService.removeContainer(id, force);
       info("Container", "Removed container", { id, force });
       return ctx.json({ success: true, message: "container removed", id });
     } catch (err) {
-      return handleError(ctx, err, "Container", "remove container", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "remove container", { id: pathParam(ctx, "id") });
     }
   }
 
   async function restart(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       await dockerService.restartContainer(id);
       info("Container", "Restarted container", { id });
       return ctx.json({ success: true, message: "container restarted", id });
     } catch (err) {
-      return handleError(ctx, err, "Container", "restart container", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "restart container", { id: pathParam(ctx, "id") });
     }
   }
 
   async function start(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       await dockerService.startContainer(id);
       info("Container", "Started container", { id });
       return ctx.json({ success: true, message: "container started", id });
     } catch (err) {
-      return handleError(ctx, err, "Container", "start container", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "start container", { id: pathParam(ctx, "id") });
     }
   }
 
   async function stop(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
 
       // Optional grace period (seconds) before Docker SIGKILLs the
       // container, e.g. for a queue worker that needs time to finish an
@@ -171,12 +172,12 @@ export function createContainerHandlers(dockerService: DockerService) {
       info("Container", "Stopped container", { id, timeout });
       return ctx.json({ success: true, message: "container stopped", id });
     } catch (err) {
-      return handleError(ctx, err, "Container", "stop container", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "stop container", { id: pathParam(ctx, "id") });
     }
   }
 
   async function logs(ctx: Context) {
-    const id = ctx.req.param("id");
+    const id = pathParam(ctx, "id");
     // zValidator("query", containerLogsQuerySchema) has already rejected malformed input
     // (non-numeric tail/since, anything but "true"/"false") with a 400 before this runs.
     const follow = ctx.req.query("follow") === "true";
@@ -235,7 +236,7 @@ export function createContainerHandlers(dockerService: DockerService) {
 
   async function runCommand(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const { command } = await ctx.req.json<CommandRequest>();
 
       const container = dockerService.docker.getContainer(id);
@@ -271,7 +272,7 @@ export function createContainerHandlers(dockerService: DockerService) {
         output: { stdout: cleanStdout, stderr: cleanStderr },
       });
     } catch (err) {
-      return handleError(ctx, err, "Container", "run command", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Container", "run command", { id: pathParam(ctx, "id") });
     }
   }
 

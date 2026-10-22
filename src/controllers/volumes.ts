@@ -2,6 +2,7 @@ import { Context } from "hono";
 import { DockerService } from "../services/Docker";
 import { info } from "../utils/console";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 export function createVolumeHandlers(dockerService: DockerService) {
   if (!dockerService) throw new Error("Docker service is required");
@@ -18,12 +19,12 @@ export function createVolumeHandlers(dockerService: DockerService) {
 
   async function get(ctx: Context) {
     try {
-      const name = ctx.req.param("name");
+      const name = pathParam(ctx, "name");
       const volume = dockerService.docker.getVolume(name);
       const data = await volume.inspect();
       return ctx.json(data);
     } catch (err) {
-      return handleError(ctx, err, "Volume", "get volume", { name: ctx.req.param("name") });
+      return handleError(ctx, err, "Volume", "get volume", { name: pathParam(ctx, "name") });
     }
   }
 
@@ -46,13 +47,13 @@ export function createVolumeHandlers(dockerService: DockerService) {
 
   async function remove(ctx: Context) {
     try {
-      const name = ctx.req.param("name");
+      const name = pathParam(ctx, "name");
       const volume = dockerService.docker.getVolume(name);
       await volume.remove();
       info("Volume", "Removed volume", { name });
       return ctx.json({ success: true, message: "volume removed", name });
     } catch (err) {
-      return handleError(ctx, err, "Volume", "remove volume", { name: ctx.req.param("name") });
+      return handleError(ctx, err, "Volume", "remove volume", { name: pathParam(ctx, "name") });
     }
   }
 
