@@ -7,7 +7,7 @@ export const runShellSchema = z.object({
 export const runComposeSchema = z.object({
   project: z.string().min(1),
   compose: z.string().min(1),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
 });
 
 export const execContainerSchema = z.object({

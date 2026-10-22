@@ -25,7 +25,7 @@ export const createDeploymentSchema = z.object({
     .object({
       run: z.boolean().default(false),
       command: z.array(z.string()).min(1).default(["php", "artisan", "migrate", "--pretend"]),
-      labels: z.record(z.string()).optional(),
+      labels: z.record(z.string(), z.string()).optional(),
     })
     .optional(),
 });

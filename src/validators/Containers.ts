@@ -25,7 +25,7 @@ export const createContainerSchema = z.object({
   image: z.string(),
   hostConfig: z.object({
     NetworkMode: z.string().optional(),
-    PortBindings: z.record(z.array(z.object({ HostPort: z.string() }))).optional(),
+    PortBindings: z.record(z.string(), z.array(z.object({ HostPort: z.string() }))).optional(),
     AutoRemove: z.boolean().optional(),
     Binds: z.array(z.string()).optional(),
   }),
@@ -33,7 +33,7 @@ export const createContainerSchema = z.object({
   entrypoint: z.string().optional(),
   workingdir: z.string().optional(),
   start: z.boolean().optional(),
-  labels: z.record(z.string()).optional(),
+  labels: z.record(z.string(), z.string()).optional(),
   networks: z.array(z.string()),
   restartPolicy: z
     .object({

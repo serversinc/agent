@@ -92,7 +92,7 @@ function loadConfig(): AppConfig {
     };
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const errorMessages = error.errors.map(err => `  - ${err.path.join(".")}: ${err.message}`).join("\n");
+      const errorMessages = error.issues.map(err => `  - ${err.path.join(".")}: ${err.message}`).join("\n");
 
       throw new Error(`Configuration validation failed:\n${errorMessages}\n\nPlease check your .env file.`);
     }

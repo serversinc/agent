@@ -8,5 +8,5 @@ export const createNetworkSchema = z.object({
   attachable: z.boolean().optional(),
   ingress: z.boolean().optional(),
   enable_ipv6: z.boolean().optional(),
-  labels: z.record(z.string()).optional(),
+  labels: z.record(z.string(), z.string()).optional(),
 });
