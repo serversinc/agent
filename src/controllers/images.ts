@@ -3,6 +3,7 @@ import { DockerService } from "../services/Docker";
 import { BuildService } from "../services/BuildService";
 import { info, error as logError } from "../utils/console";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 interface PullOptions {
   name: string;
@@ -33,11 +34,11 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
 
   async function get(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const image = await dockerService.getImage(id);
       return ctx.json(image);
     } catch (err) {
-      return handleError(ctx, err, "Image", "get image", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Image", "get image", { id: pathParam(ctx, "id") });
     }
   }
 
@@ -77,12 +78,12 @@ export function createImageHandlers(dockerService: DockerService, buildService: 
 
   async function remove(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const force = ctx.req.query("force") === "true";
       await dockerService.removeImage(id, force);
       return ctx.json({ success: true, message: "image removed" });
     } catch (err) {
-      return handleError(ctx, err, "Image", "remove image", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Image", "remove image", { id: pathParam(ctx, "id") });
     }
   }
 

@@ -2,6 +2,7 @@ import { Context } from "hono";
 import { SecurityService, SecurityServiceError } from "../services/SecurityService";
 import { runSecurityChecks } from "../services/SecurityChecks";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 export function createSecurityHandlers(securityService: SecurityService) {
   if (!securityService) throw new Error("Security service is required");
@@ -59,7 +60,7 @@ export function createSecurityHandlers(securityService: SecurityService) {
 
   async function removeFirewallPort(ctx: Context) {
     try {
-      const port = parseInt(ctx.req.param("port"), 10);
+      const port = parseInt(pathParam(ctx, "port"), 10);
       const protocol = (ctx.req.query("protocol") as "tcp" | "udp") || "tcp";
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return ctx.json({ error: "Invalid port" }, 400);

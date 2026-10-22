@@ -2,6 +2,7 @@ import { Context } from "hono";
 import { DockerService } from "../services/Docker";
 import { info } from "../utils/console";
 import { handleError } from "../utils/error";
+import { pathParam } from "../utils/params";
 
 export function createNetworkHandlers(dockerService: DockerService) {
   if (!dockerService) throw new Error("Docker service is required");
@@ -18,12 +19,12 @@ export function createNetworkHandlers(dockerService: DockerService) {
 
   async function get(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const network = dockerService.docker.getNetwork(id);
       const data = await network.inspect();
       return ctx.json(data);
     } catch (err) {
-      return handleError(ctx, err, "Network", "get network", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Network", "get network", { id: pathParam(ctx, "id") });
     }
   }
 
@@ -52,13 +53,13 @@ export function createNetworkHandlers(dockerService: DockerService) {
 
   async function remove(ctx: Context) {
     try {
-      const id = ctx.req.param("id");
+      const id = pathParam(ctx, "id");
       const network = dockerService.docker.getNetwork(id);
       await network.remove();
       info("Network", "Removed network", { id });
       return ctx.json({ success: true, message: "network removed", id });
     } catch (err) {
-      return handleError(ctx, err, "Network", "remove network", { id: ctx.req.param("id") });
+      return handleError(ctx, err, "Network", "remove network", { id: pathParam(ctx, "id") });
     }
   }
 
