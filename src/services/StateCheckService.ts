@@ -1,7 +1,7 @@
 import { info, warn } from "../utils/console";
 import { httpService } from "./Http";
 import config from "../config";
-import { runSecurityChecks } from "./SecurityChecks";
+import { runSecurityChecks, refreshOsUpdates } from "./SecurityChecks";
 
 export class StateCheckService {
   private readonly name = "StateCheck";
@@ -29,14 +29,14 @@ export class StateCheckService {
     }
   }
 
-  private runAndSend(): void {
+  private async runAndSend(): Promise<void> {
     try {
+      await refreshOsUpdates();
       const checks = runSecurityChecks();
-      httpService.postSafe({ type: "state_check", checks }).then(success => {
-        if (!success) {
-          warn(this.name, "Failed to send state checks");
-        }
-      });
+      const success = await httpService.postSafe({ type: "state_check", checks });
+      if (!success) {
+        warn(this.name, "Failed to send state checks");
+      }
     } catch (err) {
       warn(this.name, "Failed to run state checks", { error: (err as Error).message });
     }

@@ -1,4 +1,7 @@
-import { execSync, execFileSync } from "child_process";
+import { execSync, execFileSync, execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * The agent runs as a container (Alpine base) but ufw/sshd/fail2ban/apt are
@@ -30,6 +33,20 @@ export function runHostExec(binary: string, args: string[] = [], options: { time
     timeout: options.timeout ?? 5000,
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+/**
+ * Async counterpart of `runHostExec` for commands that take long enough to
+ * stall the event loop if run synchronously. Same fixed argv, no shell; the
+ * promise rejects on a non-zero exit or when `timeout` elapses.
+ */
+export async function runHostExecAsync(binary: string, args: string[] = [], options: { timeout?: number } = {}): Promise<string> {
+  const { stdout } = await execFileAsync("nsenter", [...NSENTER_ARGS, binary, ...args], {
+    encoding: "utf8",
+    timeout: options.timeout ?? 5000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return stdout.trim();
 }
 
 export function hostFileExists(path: string): boolean {

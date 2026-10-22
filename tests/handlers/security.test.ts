@@ -3,12 +3,12 @@ import request from "supertest";
 import { createSecurityHandlers } from "../../src/controllers/security";
 import { SecurityServiceError } from "../../src/services/SecurityService";
 import { makeApp } from "../helpers/makeApp";
-import { runSecurityChecks } from "../../src/services/SecurityChecks";
+import { runSecurityChecks, refreshOsUpdates, OS_UPDATES_ON_DEMAND_MAX_AGE_MS } from "../../src/services/SecurityChecks";
 
 vi.mock("../../src/utils/console", () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), success: vi.fn(), _setLogger: vi.fn() }));
 vi.mock("../../src/services/SecurityChecks", async () => {
   const actual = await vi.importActual<typeof import("../../src/services/SecurityChecks")>("../../src/services/SecurityChecks");
-  return { ...actual, runSecurityChecks: vi.fn() };
+  return { ...actual, runSecurityChecks: vi.fn(), refreshOsUpdates: vi.fn().mockResolvedValue(undefined) };
 });
 
 describe("Security Handlers", () => {
@@ -60,6 +60,23 @@ describe("Security Handlers", () => {
 
       expect(response.status).toBe(200);
       expect(response.body.checks).toHaveLength(1);
+    });
+
+    it("refreshes OS updates for at most 5 minutes of age before it collects the checks", async () => {
+      const order: string[] = [];
+      (refreshOsUpdates as any).mockImplementation(async () => {
+        order.push("refresh");
+      });
+      (runSecurityChecks as any).mockImplementation(() => {
+        order.push("collect");
+        return [];
+      });
+
+      await request(server).get("/security");
+
+      expect(refreshOsUpdates).toHaveBeenCalledWith(300000);
+      expect(OS_UPDATES_ON_DEMAND_MAX_AGE_MS).toBe(300000);
+      expect(order).toEqual(["refresh", "collect"]);
     });
   });
 

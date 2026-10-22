@@ -1,6 +1,6 @@
-import { runHost, hostFileExists, readHostFile } from "./HostShell";
+import { runHost, runHostExecAsync, hostFileExists, readHostFile } from "./HostShell";
 
-export type CheckKey = "root_ssh_login" | "auto_updates" | "firewall" | "fail2ban" | "time_sync";
+export type CheckKey = "root_ssh_login" | "auto_updates" | "firewall" | "fail2ban" | "time_sync" | "os_updates";
 export type CheckStatus = "good" | "bad" | "unknown";
 
 export interface StateCheckResult {
@@ -113,6 +113,84 @@ export function checkTimeSync(): StateCheckResult {
   }
 }
 
+/**
+ * Counts the packages `apt-get -s dist-upgrade` plans to upgrade and how many
+ * of them come from a security pocket. An upgrade line looks like:
+ *
+ *   Inst libssl3 [3.0.2-0ubuntu1.7] (3.0.2-0ubuntu1.10 Ubuntu:22.04/jammy-security [amd64])
+ *
+ * `Inst` lines without a `[oldVersion]` bracket are new installs pulled in by
+ * the dependency resolution, not upgrades, so they are not counted.
+ */
+export function parseAptUpgrades(output: string): { total: number; security: number } {
+  let total = 0;
+  let security = 0;
+  for (const line of output.split("\n")) {
+    const match = line.match(/^Inst\s+\S+\s+\[[^\]]+\]\s+\((.*)\)/);
+    if (!match) continue;
+    total += 1;
+    if (/security/i.test(match[1])) security += 1;
+  }
+  return { total, security };
+}
+
+// A simulated dist-upgrade reads every package list, which outlasts the default
+// 5s host timeout on small or loaded servers.
+const OS_UPDATES_TIMEOUT_MS = 30000;
+// How long a collected result is served before a refresh runs apt again, unless
+// the caller asks for a younger one.
+const OS_UPDATES_TTL_MS = 60 * 60 * 1000;
+// The longest a result served by `GET /security` may be.
+export const OS_UPDATES_ON_DEMAND_MAX_AGE_MS = 5 * 60 * 1000;
+
+const OS_UPDATES_UNKNOWN: StateCheckResult = { check_key: "os_updates", status: "unknown", detail: null };
+
+let osUpdatesCache: { result: StateCheckResult; at: number } | null = null;
+let osUpdatesRefresh: Promise<void> | null = null;
+
+async function collectOsUpdates(): Promise<StateCheckResult> {
+  try {
+    const hasApt = hostFileExists("/usr/bin/apt-get") || hostFileExists("/usr/bin/apt");
+    if (!hasApt) {
+      return OS_UPDATES_UNKNOWN;
+    }
+    const output = await runHostExecAsync("apt-get", ["-s", "-q", "dist-upgrade"], { timeout: OS_UPDATES_TIMEOUT_MS });
+    const { total, security } = parseAptUpgrades(output);
+    return { check_key: "os_updates", status: total > 0 ? "bad" : "good", detail: { total, security } };
+  } catch {
+    return OS_UPDATES_UNKNOWN;
+  }
+}
+
+/**
+ * Runs apt without blocking the event loop and stores the result for
+ * `checkOsUpdates`. A result younger than `maxAgeMs` is reused, and concurrent
+ * calls share one apt run. Never rejects.
+ */
+export function refreshOsUpdates(maxAgeMs: number = OS_UPDATES_TTL_MS): Promise<void> {
+  if (osUpdatesCache && Date.now() - osUpdatesCache.at < maxAgeMs) {
+    return Promise.resolve();
+  }
+  osUpdatesRefresh ??= collectOsUpdates()
+    .then(result => {
+      osUpdatesCache = { result, at: Date.now() };
+    })
+    .finally(() => {
+      osUpdatesRefresh = null;
+    });
+  return osUpdatesRefresh;
+}
+
+/** The last collected result, or `unknown` until the first refresh finishes. */
+export function checkOsUpdates(): StateCheckResult {
+  return osUpdatesCache?.result ?? OS_UPDATES_UNKNOWN;
+}
+
+export function resetOsUpdatesCache(): void {
+  osUpdatesCache = null;
+  osUpdatesRefresh = null;
+}
+
 export function runSecurityChecks(): StateCheckResult[] {
   return [
     checkRootSshLogin(),
@@ -120,5 +198,6 @@ export function runSecurityChecks(): StateCheckResult[] {
     checkFirewall(),
     checkFail2ban(),
     checkTimeSync(),
+    checkOsUpdates(),
   ];
 }

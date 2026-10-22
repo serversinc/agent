@@ -1,6 +1,6 @@
 import { Context } from "hono";
 import { SecurityService, SecurityServiceError } from "../services/SecurityService";
-import { runSecurityChecks } from "../services/SecurityChecks";
+import { runSecurityChecks, refreshOsUpdates, OS_UPDATES_ON_DEMAND_MAX_AGE_MS } from "../services/SecurityChecks";
 import { handleError } from "../utils/error";
 import { pathParam } from "../utils/params";
 
@@ -16,6 +16,7 @@ export function createSecurityHandlers(securityService: SecurityService) {
 
   async function getStatus(ctx: Context) {
     try {
+      await refreshOsUpdates(OS_UPDATES_ON_DEMAND_MAX_AGE_MS);
       const checks = runSecurityChecks();
       return ctx.json({ checks });
     } catch (err) {
