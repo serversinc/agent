@@ -1,4 +1,4 @@
-import { runHost, hostFileExists, readHostFile } from "./HostShell";
+import { runHost, runHostExecAsync, hostFileExists, readHostFile } from "./HostShell";
 
 export type CheckKey = "root_ssh_login" | "auto_updates" | "firewall" | "fail2ban" | "time_sync" | "os_updates";
 export type CheckStatus = "good" | "bad" | "unknown";
@@ -137,19 +137,55 @@ export function parseAptUpgrades(output: string): { total: number; security: num
 // A simulated dist-upgrade reads every package list, which outlasts the default
 // 5s host timeout on small or loaded servers.
 const OS_UPDATES_TIMEOUT_MS = 30000;
+// How long a collected result is served before the next refresh runs apt again.
+const OS_UPDATES_TTL_MS = 60 * 60 * 1000;
 
-export function checkOsUpdates(): StateCheckResult {
+const OS_UPDATES_UNKNOWN: StateCheckResult = { check_key: "os_updates", status: "unknown", detail: null };
+
+let osUpdatesCache: { result: StateCheckResult; at: number } | null = null;
+let osUpdatesRefresh: Promise<void> | null = null;
+
+async function collectOsUpdates(): Promise<StateCheckResult> {
   try {
     const hasApt = hostFileExists("/usr/bin/apt-get") || hostFileExists("/usr/bin/apt");
     if (!hasApt) {
-      return { check_key: "os_updates", status: "unknown", detail: null };
+      return OS_UPDATES_UNKNOWN;
     }
-    const output = runHost("apt-get -s -q dist-upgrade", { timeout: OS_UPDATES_TIMEOUT_MS });
+    const output = await runHostExecAsync("apt-get", ["-s", "-q", "dist-upgrade"], { timeout: OS_UPDATES_TIMEOUT_MS });
     const { total, security } = parseAptUpgrades(output);
     return { check_key: "os_updates", status: total > 0 ? "bad" : "good", detail: { total, security } };
   } catch {
-    return { check_key: "os_updates", status: "unknown", detail: null };
+    return OS_UPDATES_UNKNOWN;
   }
+}
+
+/**
+ * Runs apt without blocking the event loop and stores the result for
+ * `checkOsUpdates`. A result younger than the TTL is reused, and concurrent
+ * calls share one apt run. Never rejects.
+ */
+export function refreshOsUpdates(): Promise<void> {
+  if (osUpdatesCache && Date.now() - osUpdatesCache.at < OS_UPDATES_TTL_MS) {
+    return Promise.resolve();
+  }
+  osUpdatesRefresh ??= collectOsUpdates()
+    .then(result => {
+      osUpdatesCache = { result, at: Date.now() };
+    })
+    .finally(() => {
+      osUpdatesRefresh = null;
+    });
+  return osUpdatesRefresh;
+}
+
+/** The last collected result, or `unknown` until the first refresh finishes. */
+export function checkOsUpdates(): StateCheckResult {
+  return osUpdatesCache?.result ?? OS_UPDATES_UNKNOWN;
+}
+
+export function resetOsUpdatesCache(): void {
+  osUpdatesCache = null;
+  osUpdatesRefresh = null;
 }
 
 export function runSecurityChecks(): StateCheckResult[] {

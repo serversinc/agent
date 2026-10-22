@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { checkOsUpdates, parseAptUpgrades, runSecurityChecks } from "../../src/services/SecurityChecks";
+import { checkOsUpdates, parseAptUpgrades, refreshOsUpdates, resetOsUpdatesCache, runSecurityChecks } from "../../src/services/SecurityChecks";
 import * as HostShell from "../../src/services/HostShell";
 
 vi.mock("../../src/services/HostShell", () => ({
   runHost: vi.fn(),
+  runHostExecAsync: vi.fn(),
   hostFileExists: vi.fn(),
   readHostFile: vi.fn(),
   writeHostFile: vi.fn(),
@@ -11,6 +12,7 @@ vi.mock("../../src/services/HostShell", () => ({
 }));
 
 const mockRunHost = HostShell.runHost as unknown as ReturnType<typeof vi.fn>;
+const mockRunHostExecAsync = HostShell.runHostExecAsync as unknown as ReturnType<typeof vi.fn>;
 const mockHostFileExists = HostShell.hostFileExists as unknown as ReturnType<typeof vi.fn>;
 
 // Snippets of real `apt-get -s dist-upgrade` output. The `Inst` lines carry
@@ -39,6 +41,8 @@ const DEBIAN_UPGRADE_OUTPUT = [
 describe("SecurityChecks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    resetOsUpdatesCache();
   });
 
   describe("parseAptUpgrades", () => {
@@ -78,24 +82,35 @@ describe("SecurityChecks", () => {
     });
   });
 
-  describe("checkOsUpdates", () => {
-    it("reports total and security counts from apt", () => {
+  describe("refreshOsUpdates and checkOsUpdates", () => {
+    const APT_ARGS = ["-s", "-q", "dist-upgrade"];
+
+    beforeEach(() => {
       mockHostFileExists.mockImplementation((p: string) => p === "/usr/bin/apt-get");
-      mockRunHost.mockReturnValue(UBUNTU_UPGRADE_OUTPUT);
+    });
 
-      const result = checkOsUpdates();
+    it("reports unknown until the first refresh finishes", () => {
+      expect(checkOsUpdates()).toEqual({ check_key: "os_updates", status: "unknown", detail: null });
+      expect(mockRunHostExecAsync).not.toHaveBeenCalled();
+    });
 
-      expect(result).toEqual({
+    it("reports total and security counts from apt", async () => {
+      mockRunHostExecAsync.mockResolvedValue(UBUNTU_UPGRADE_OUTPUT);
+
+      await refreshOsUpdates();
+
+      expect(checkOsUpdates()).toEqual({
         check_key: "os_updates",
         status: "bad",
         detail: { total: 3, security: 2 },
       });
-      expect(mockRunHost).toHaveBeenCalledWith("apt-get -s -q dist-upgrade", { timeout: 30000 });
+      expect(mockRunHostExecAsync).toHaveBeenCalledWith("apt-get", APT_ARGS, { timeout: 30000 });
     });
 
-    it("reports good when the system is fully patched", () => {
-      mockHostFileExists.mockImplementation((p: string) => p === "/usr/bin/apt-get");
-      mockRunHost.mockReturnValue("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.");
+    it("reports good when the system is fully patched", async () => {
+      mockRunHostExecAsync.mockResolvedValue("0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.");
+
+      await refreshOsUpdates();
 
       expect(checkOsUpdates()).toEqual({
         check_key: "os_updates",
@@ -104,20 +119,47 @@ describe("SecurityChecks", () => {
       });
     });
 
-    it("reports unknown when apt is not installed", () => {
+    it("reports unknown when apt is not installed", async () => {
       mockHostFileExists.mockReturnValue(false);
 
+      await refreshOsUpdates();
+
       expect(checkOsUpdates()).toEqual({ check_key: "os_updates", status: "unknown", detail: null });
-      expect(mockRunHost).not.toHaveBeenCalled();
+      expect(mockRunHostExecAsync).toHaveBeenCalledTimes(0);
     });
 
-    it("reports unknown when the apt command fails", () => {
-      mockHostFileExists.mockImplementation((p: string) => p === "/usr/bin/apt-get");
-      mockRunHost.mockImplementation(() => {
-        throw new Error("apt-get: command not found");
-      });
+    it("reports unknown when the apt command fails", async () => {
+      mockRunHostExecAsync.mockRejectedValue(new Error("apt-get exited with code 100"));
+
+      await refreshOsUpdates();
 
       expect(checkOsUpdates()).toEqual({ check_key: "os_updates", status: "unknown", detail: null });
+    });
+
+    it("shares one apt run between concurrent refreshes", async () => {
+      mockRunHostExecAsync.mockResolvedValue(UBUNTU_UPGRADE_OUTPUT);
+
+      await Promise.all([refreshOsUpdates(), refreshOsUpdates()]);
+
+      expect(mockRunHostExecAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it("reuses the cached result within the hour and runs apt again after it", async () => {
+      vi.useFakeTimers();
+      mockRunHostExecAsync.mockResolvedValueOnce(UBUNTU_UPGRADE_OUTPUT).mockResolvedValueOnce("");
+
+      await refreshOsUpdates();
+      vi.advanceTimersByTime(59 * 60 * 1000);
+      await refreshOsUpdates();
+
+      expect(mockRunHostExecAsync).toHaveBeenCalledTimes(1);
+      expect(checkOsUpdates().detail).toEqual({ total: 3, security: 2 });
+
+      vi.advanceTimersByTime(2 * 60 * 1000);
+      await refreshOsUpdates();
+
+      expect(mockRunHostExecAsync).toHaveBeenCalledTimes(2);
+      expect(checkOsUpdates()).toEqual({ check_key: "os_updates", status: "good", detail: { total: 0, security: 0 } });
     });
   });
 
