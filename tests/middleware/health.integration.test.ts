@@ -45,7 +45,7 @@ describe("/health route", () => {
 
     const healthRes = await request(s.server).get("/health");
     expect(healthRes.status).toBe(200);
-    expect(healthRes.body.status).toBe("ok");
+    expect(healthRes.body).toEqual({ status: "ok" });
 
     const protectedRes = await request(s.server).post("/test").send({});
     expect(protectedRes.status).toBe(401);
