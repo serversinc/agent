@@ -2,6 +2,7 @@ import { httpService } from "./Http";
 import { DockerService } from "./Docker";
 import { demultiplexDockerStream, stripAnsiCodes, DockerLogFrameParser } from "../utils/transformers";
 import { info, warn, error as logError } from "../utils/console";
+import { redactInspect } from "../utils/redactInspect";
 
 const DEFAULT_STOP_GRACE_SECONDS = 140;
 // Without a health check, how long a new container must stay running before
@@ -143,7 +144,7 @@ export class DeployService {
       }
 
       log("Deployment completed");
-      const container = await this.docker.getContainer(newContainerId);
+      const container = redactInspect(await this.docker.getContainer(newContainerId));
 
       return await this.report(options, "completed", logs, null, container, retired, discarded);
     } catch (err) {

@@ -123,6 +123,25 @@ describe("Container Handlers", () => {
       expect(response.body.container.Id).toBe("new-456");
     });
 
+    it("should redact environment values in the created container", async () => {
+      mockDockerService.checkImageExists.mockResolvedValue(true);
+      mockDockerService.createContainer.mockResolvedValue({ id: "new-123" });
+      mockDockerService.getContainer.mockResolvedValue({
+        Id: "new-123",
+        Name: "/test-container",
+        Config: { Env: ["A=secret-a", "B=secret-b"] },
+      });
+
+      const response = await request(server).post("/containers").send({
+        name: "test-container",
+        image: "nginx:latest",
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.container.Config.Env).toEqual(["A=[redacted]", "B=[redacted]"]);
+      expect(response.body.containerName).toBe("/test-container");
+    });
+
     it("should start container when start=true", async () => {
       mockDockerService.checkImageExists.mockResolvedValue(true);
       mockDockerService.createContainer.mockResolvedValue({ id: "new-789" });
@@ -161,6 +180,19 @@ describe("Container Handlers", () => {
       expect(response.status).toBe(200);
       expect(response.body.Id).toBe("abc123");
       expect(mockDockerService.getContainer).toHaveBeenCalledWith("abc123");
+    });
+
+    it("should redact environment values in the response", async () => {
+      mockDockerService.getContainer.mockResolvedValue({
+        Id: "abc123",
+        Name: "/my-container",
+        Config: { Env: ["A=secret-a", "B=secret-b"] },
+      });
+
+      const response = await request(server).get("/containers/abc123");
+
+      expect(response.status).toBe(200);
+      expect(response.body.Config.Env).toEqual(["A=[redacted]", "B=[redacted]"]);
     });
 
     it("should return 404 for non-existent container", async () => {
