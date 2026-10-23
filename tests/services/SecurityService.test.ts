@@ -34,6 +34,8 @@ const MIXED_ACTION_RULES = [
   "5353/udp                   REJECT IN   Anywhere",
   "6379/udp                   ALLOW IN    Anywhere",
   "8443/tcp                   REJECT IN   Anywhere",
+  "25/tcp                     DENY OUT    Anywhere",
+  "53/udp                     ALLOW OUT   Anywhere",
 ].join("\n");
 
 type FileMap = Record<string, string | null>;

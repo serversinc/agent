@@ -71,13 +71,14 @@ function expandPorts(portField: string, protocols: FirewallProtocol[]): Firewall
  * action. The To column may carry an app-profile name in parentheses (which
  * can itself contain a "(v6)" marker), so the optional group is greedy. ufw
  * prints a rate-limited rule as LIMIT, which for containers behaves like
- * ALLOW.
+ * ALLOW. OUT rules filter traffic leaving the host and never apply to
+ * inbound connections, so they are skipped.
  */
 function parseUfwStatusRow(line: string): UfwStatusRow | null {
   const match = line.match(
-    /^(\S+)(?:\s+\(.+\))?\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+(?:IN|FWD|OUT))?\s+(.+?)\s*$/,
+    /^(\S+)(?:\s+\(.+\))?\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+(IN|FWD|OUT))?\s+(.+?)\s*$/,
   );
-  if (!match) return null;
+  if (!match || match[3] === "OUT") return null;
 
   const to = match[1].match(/^([\d,:]+)(?:\/(tcp|udp))?$/);
   if (!to) return null;
@@ -87,7 +88,7 @@ function parseUfwStatusRow(line: string): UfwStatusRow | null {
   if (ports.length === 0) return null;
 
   const action: FirewallAction = match[2] === "LIMIT" ? "ALLOW" : (match[2] as FirewallAction);
-  return { ports, from: match[3].trim(), action };
+  return { ports, from: match[4].trim(), action };
 }
 
 function isUfwInstalled(): boolean {
