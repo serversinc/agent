@@ -20,6 +20,8 @@ const DOCKER_USER_END = "# END agent DOCKER-USER";
 
 export type FirewallProtocol = "tcp" | "udp";
 
+type FirewallAction = "ALLOW" | "DENY" | "REJECT";
+
 export interface FirewallPortRule {
   // ufw prints a range as "1000:2000"; single ports stay numeric so existing
   // callers (and the HTTP response) keep the shape they have always had.
@@ -28,6 +30,7 @@ export interface FirewallPortRule {
 }
 
 interface DockerUserRule extends FirewallPortRule {
+  action: FirewallAction;
   // Absent for an "Anywhere" rule. Present rules only appear in the file for
   // their own address family.
   source?: string;
@@ -41,6 +44,7 @@ interface DockerUserRules {
 interface UfwStatusRow {
   ports: FirewallPortRule[];
   from: string;
+  action: FirewallAction;
 }
 
 export class SecurityServiceError extends Error {}
@@ -63,12 +67,16 @@ function expandPorts(portField: string, protocols: FirewallProtocol[]): Firewall
 }
 
 /**
- * Split a `ufw status verbose` row into its port rules and its From column.
- * The To column may carry an app-profile name in parentheses (which can
- * itself contain a "(v6)" marker), so the optional group is greedy.
+ * Split a `ufw status verbose` row into its port rules, From column and
+ * action. The To column may carry an app-profile name in parentheses (which
+ * can itself contain a "(v6)" marker), so the optional group is greedy. ufw
+ * prints a rate-limited rule as LIMIT, which for containers behaves like
+ * ALLOW.
  */
 function parseUfwStatusRow(line: string): UfwStatusRow | null {
-  const match = line.match(/^(\S+)(?:\s+\(.+\))?\s+ALLOW(?:\s+(?:IN|FWD|OUT))?\s+(.+?)\s*$/);
+  const match = line.match(
+    /^(\S+)(?:\s+\(.+\))?\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+(?:IN|FWD|OUT))?\s+(.+?)\s*$/,
+  );
   if (!match) return null;
 
   const to = match[1].match(/^([\d,:]+)(?:\/(tcp|udp))?$/);
@@ -78,11 +86,24 @@ function parseUfwStatusRow(line: string): UfwStatusRow | null {
   const ports = expandPorts(to[1], protocols);
   if (ports.length === 0) return null;
 
-  return { ports, from: match[2].trim() };
+  const action: FirewallAction = match[2] === "LIMIT" ? "ALLOW" : (match[2] as FirewallAction);
+  return { ports, from: match[3].trim(), action };
 }
 
 function isUfwInstalled(): boolean {
   return hostFileExists("/usr/sbin/ufw") || hostFileExists("/usr/bin/ufw");
+}
+
+/**
+ * ufw is first-match-wins, so the generated chain has to carry rules in the
+ * same order ufw lists them, including the ones that deny or reject traffic.
+ */
+function ruleTarget(rule: DockerUserRule): string {
+  if (rule.action === "DENY") return "-j DROP";
+  if (rule.action === "REJECT") {
+    return rule.protocol === "tcp" ? "-j REJECT --reject-with tcp-reset" : "-j REJECT";
+  }
+  return "-j RETURN";
 }
 
 /**
@@ -103,7 +124,7 @@ function dockerUserBlock(interfaces: string[], rules: DockerUserRule[]): string 
     for (const rule of rules) {
       const source = rule.source ? ` -s ${rule.source}` : "";
       lines.push(
-        `-A DOCKER-USER -i ${iface}${source} -p ${rule.protocol} -m conntrack --ctorigdstport ${rule.port} --ctdir ORIGINAL -j RETURN`,
+        `-A DOCKER-USER -i ${iface}${source} -p ${rule.protocol} -m conntrack --ctorigdstport ${rule.port} --ctdir ORIGINAL ${ruleTarget(rule)}`,
       );
     }
   }
@@ -146,16 +167,16 @@ function ruleKey(rule: FirewallPortRule): string {
   return `${rule.port}/${rule.protocol}`;
 }
 
-/** Append unrestricted rules that are not already present in a family. */
+/** Append unrestricted allow rules that are not already present in a family. */
 function withUniqueRules(rules: DockerUserRule[], additions: FirewallPortRule[]): DockerUserRule[] {
-  const seen = new Set(rules.map(rule => `${rule.source ?? ""}|${ruleKey(rule)}`));
+  const seen = new Set(rules.map(rule => `${rule.action}|${rule.source ?? ""}|${ruleKey(rule)}`));
   const merged = [...rules];
 
   for (const addition of additions) {
-    const key = `|${ruleKey(addition)}`;
+    const key = `ALLOW||${ruleKey(addition)}`;
     if (!seen.has(key)) {
       seen.add(key);
-      merged.push({ ...addition });
+      merged.push({ ...addition, action: "ALLOW" });
     }
   }
 
@@ -288,13 +309,13 @@ export class SecurityService {
     }
   }
 
-  private parseFirewallPorts(output: string): FirewallPortRule[] {
+  private parseFirewallPorts(output: string, actions: FirewallAction[] = ["ALLOW"]): FirewallPortRule[] {
     const seen = new Set<string>();
     const ports: FirewallPortRule[] = [];
 
     for (const line of output.split("\n")) {
       const row = parseUfwStatusRow(line);
-      if (!row) continue;
+      if (!row || !actions.includes(row.action)) continue;
 
       for (const rule of row.ports) {
         const key = ruleKey(rule);
@@ -310,8 +331,9 @@ export class SecurityService {
 
   /**
    * The HTTP endpoint only needs port/protocol, but the DOCKER-USER block must
-   * also keep ufw's source restriction. ufw prints a dual-stack "Anywhere"
-   * rule as two rows; dedupe keeps one unrestricted rule per family.
+   * also keep ufw's source restriction and action in ufw's own order. ufw
+   * prints a dual-stack "Anywhere" rule as two rows; dedupe keeps one rule per
+   * family, source and action.
    */
   private parseDockerUserRules(output: string): DockerUserRules {
     const ipv4 = new Map<string, DockerUserRule>();
@@ -335,9 +357,9 @@ export class SecurityService {
       for (const target of targets) {
         const familyRules = target.family === "ipv4" ? ipv4 : ipv6;
         for (const rule of row.ports) {
-          const key = `${target.source ?? ""}|${ruleKey(rule)}`;
+          const key = `${row.action}|${target.source ?? ""}|${ruleKey(rule)}`;
           if (!familyRules.has(key)) {
-            familyRules.set(key, { ...rule, source: target.source });
+            familyRules.set(key, { ...rule, action: row.action, source: target.source });
           }
         }
       }
@@ -382,6 +404,7 @@ export class SecurityService {
 
     const statusOutput = this.readFirewallStatus();
     const allowedPorts = this.parseFirewallPorts(statusOutput);
+    const deniedPorts = this.parseFirewallPorts(statusOutput, ["DENY", "REJECT"]);
     let rules = this.parseDockerUserRules(statusOutput);
 
     // First run on a host that was already allowing container ports directly:
@@ -391,7 +414,7 @@ export class SecurityService {
     // survives the firewall being disabled, so a port the user removed is not
     // reopened the next time ufw is enabled.
     if (!hostFileExists(DOCKER_USER_MIGRATED)) {
-      const migrated = await this.allowPublishedContainerPorts(allowedPorts);
+      const migrated = await this.allowPublishedContainerPorts(allowedPorts, deniedPorts);
       writeHostFile(DOCKER_USER_MIGRATED, `${new Date().toISOString()}\n`);
       if (migrated.length > 0) {
         rules = {
@@ -463,11 +486,15 @@ export class SecurityService {
     return interfaces;
   }
 
-  private async allowPublishedContainerPorts(allowed: FirewallPortRule[]): Promise<FirewallPortRule[]> {
+  private async allowPublishedContainerPorts(
+    allowed: FirewallPortRule[],
+    denied: FirewallPortRule[],
+  ): Promise<FirewallPortRule[]> {
     if (!this.dockerService) return [];
 
     const containers = await this.dockerService.listContainers();
     const seen = new Set(allowed.map(ruleKey));
+    const deniedKeys = new Set(denied.map(ruleKey));
     const migrated: FirewallPortRule[] = [];
 
     for (const container of containers) {
@@ -484,9 +511,18 @@ export class SecurityService {
         const protocol = (published.type as FirewallProtocol) || "tcp";
         const key = `${port}/${protocol}`;
         if (seen.has(key)) continue;
+        // Never turn an explicit deny or reject into an allow: the block would
+        // mirror that rule ahead of the generated allow and win anyway.
+        if (deniedKeys.has(key)) continue;
 
         seen.add(key);
-        runHost(`ufw allow ${port}/${protocol}`);
+        try {
+          runHost(`ufw allow ${port}/${protocol}`);
+        } catch (err) {
+          throw new SecurityServiceError(
+            `Firewall migration failed for ${port}/${protocol}: ${(err as Error).message}`,
+          );
+        }
         migrated.push({ port, protocol });
       }
     }

@@ -27,6 +27,15 @@ const ORIGINAL_RULES = [
   "",
 ].join("\n");
 
+const MIXED_ACTION_RULES = [
+  "22/tcp                     ALLOW IN    Anywhere",
+  "6379/tcp                   DENY IN     Anywhere",
+  "8080/tcp                   DENY IN     203.0.113.5",
+  "5353/udp                   REJECT IN   Anywhere",
+  "6379/udp                   ALLOW IN    Anywhere",
+  "8443/tcp                   REJECT IN   Anywhere",
+].join("\n");
+
 type FileMap = Record<string, string | null>;
 
 function mockHostFiles(files: FileMap) {
@@ -44,6 +53,7 @@ interface ActiveUfwOptions {
   ipv4?: string;
   ipv6?: string;
   reloadError?: string;
+  allowError?: string;
 }
 
 function mockActiveUfw(options: ActiveUfwOptions = {}) {
@@ -52,6 +62,7 @@ function mockActiveUfw(options: ActiveUfwOptions = {}) {
   const ipv6 = options.ipv6 ?? "";
 
   mockRunHost.mockImplementation((cmd: string) => {
+    if (options.allowError && cmd.startsWith("ufw allow ")) throw new Error(options.allowError);
     switch (cmd) {
       case "ufw status":
         return "Status: active";
@@ -256,6 +267,23 @@ describe("SecurityService", () => {
 
       expect(ports).toEqual([{ port: 9100, protocol: "tcp" }]);
     });
+
+    it("returns only the ALLOW rules when the status also has deny and reject rows", () => {
+      mockRunHost.mockReturnValue(
+        [
+          "Status: active",
+          "",
+          "To                         Action      From",
+          "--                         ------      ----",
+          MIXED_ACTION_RULES,
+        ].join("\n"),
+      );
+
+      expect(service.listFirewallPorts()).toEqual([
+        { port: 22, protocol: "tcp" },
+        { port: 6379, protocol: "udp" },
+      ]);
+    });
   });
 
   describe("syncDockerUserChain", () => {
@@ -375,6 +403,35 @@ COMMIT
 
       expect(mockWriteHostFile).toHaveBeenCalledWith(AFTER_RULES, expectedAfter);
       expect(mockWriteHostFile).toHaveBeenCalledWith(AFTER6_RULES, expectedAfter6);
+    });
+
+    it("mirrors allow, deny and reject rules in ufw order", async () => {
+      mockHostFiles({
+        "/usr/sbin/ufw": "",
+        [AFTER_RULES]: ORIGINAL_RULES,
+        [AFTER6_RULES]: ORIGINAL_RULES,
+        [MIGRATION_STATE]: "2026-01-01T00:00:00.000Z\n",
+      });
+      mockActiveUfw({ allowed: MIXED_ACTION_RULES });
+
+      await service.syncDockerUserChain();
+
+      const expectedAfter = `${ORIGINAL_RULES}# BEGIN agent DOCKER-USER
+*filter
+:DOCKER-USER - [0:0]
+-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+-A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 22 --ctdir ORIGINAL -j RETURN
+-A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 6379 --ctdir ORIGINAL -j DROP
+-A DOCKER-USER -i eth0 -s 203.0.113.5 -p tcp -m conntrack --ctorigdstport 8080 --ctdir ORIGINAL -j DROP
+-A DOCKER-USER -i eth0 -p udp -m conntrack --ctorigdstport 5353 --ctdir ORIGINAL -j REJECT
+-A DOCKER-USER -i eth0 -p udp -m conntrack --ctorigdstport 6379 --ctdir ORIGINAL -j RETURN
+-A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 8443 --ctdir ORIGINAL -j REJECT --reject-with tcp-reset
+-A DOCKER-USER -i eth0 -j DROP
+COMMIT
+# END agent DOCKER-USER
+`;
+
+      expect(mockWriteHostFile).toHaveBeenCalledWith(AFTER_RULES, expectedAfter);
     });
 
     it("does not write or reload when both files already hold the expected block", async () => {
@@ -532,6 +589,55 @@ ${suffix}`;
       ]);
       expect(mockWriteHostFile).toHaveBeenCalledWith(MIGRATION_STATE, "2026-10-23T12:00:00.000Z\n");
       expect(files.get(MIGRATION_STATE)).toBe("2026-10-23T12:00:00.000Z\n");
+    });
+
+    it("skips published ports that ufw denies or rejects, from any source", async () => {
+      const files = mockHostFiles({
+        "/usr/sbin/ufw": "",
+        [AFTER_RULES]: ORIGINAL_RULES,
+        [AFTER6_RULES]: ORIGINAL_RULES,
+      });
+      mockActiveUfw({
+        allowed: [
+          "22/tcp                     ALLOW IN    Anywhere",
+          "6379/tcp                   DENY IN     Anywhere",
+          "9000/tcp                   DENY IN     203.0.113.5",
+          "7000/tcp                   REJECT IN   203.0.113.5",
+        ].join("\n"),
+      });
+      mockListContainers.mockResolvedValue([
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 6379, public: 6379 }] },
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 9000, public: 9000 }] },
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 7000, public: 7000 }] },
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 8080, public: 8080 }] },
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 22, public: 22 }] },
+      ]);
+
+      await service.syncDockerUserChain();
+
+      expect(mockRunHost.mock.calls.map(call => call[0]).filter(cmd => cmd.startsWith("ufw allow "))).toEqual([
+        "ufw allow 8080/tcp",
+      ]);
+      expect(files.get(MIGRATION_STATE)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it("reports which port failed to migrate and leaves the state file unwritten", async () => {
+      const files = mockHostFiles({
+        "/usr/sbin/ufw": "",
+        [AFTER_RULES]: ORIGINAL_RULES,
+        [AFTER6_RULES]: ORIGINAL_RULES,
+      });
+      mockActiveUfw({ allowed: "22/tcp                     ALLOW IN    Anywhere", allowError: "permission denied" });
+      mockListContainers.mockResolvedValue([
+        { state: "running", ports: [{ type: "tcp", ip: "0.0.0.0", private: 7000, public: 7000 }] },
+      ]);
+
+      await expect(service.syncDockerUserChain()).rejects.toThrow(
+        new SecurityServiceError("Firewall migration failed for 7000/tcp: permission denied"),
+      );
+
+      expect(mockWriteHostFile.mock.calls).toEqual([]);
+      expect(files.has(MIGRATION_STATE)).toBe(false);
     });
 
     it("does not migrate published ports again when the state file already exists", async () => {
