@@ -36,7 +36,7 @@ export function createSecurityHandlers(securityService: SecurityService) {
   async function updateFirewall(ctx: Context) {
     try {
       const { enabled } = await ctx.req.json<{ enabled: boolean }>();
-      return ctx.json(securityService.setFirewall(enabled));
+      return ctx.json(await securityService.setFirewall(enabled));
     } catch (err) {
       return respondError(ctx, err, "update firewall");
     }
@@ -53,7 +53,7 @@ export function createSecurityHandlers(securityService: SecurityService) {
   async function addFirewallPort(ctx: Context) {
     try {
       const { port, protocol } = await ctx.req.json<{ port: number; protocol: "tcp" | "udp" }>();
-      return ctx.json(securityService.addFirewallPort(port, protocol));
+      return ctx.json(await securityService.addFirewallPort(port, protocol));
     } catch (err) {
       return respondError(ctx, err, "add firewall port");
     }
@@ -66,7 +66,7 @@ export function createSecurityHandlers(securityService: SecurityService) {
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return ctx.json({ error: "Invalid port" }, 400);
       }
-      return ctx.json(securityService.removeFirewallPort(port, protocol));
+      return ctx.json(await securityService.removeFirewallPort(port, protocol));
     } catch (err) {
       return respondError(ctx, err, "remove firewall port");
     }
