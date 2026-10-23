@@ -18,7 +18,7 @@ import { WatcherService } from "./services/Watcher";
 import { BackupService } from "./services/Backup";
 import { heartbeatService } from "./services/HeartbeatService";
 import { stateCheckService } from "./services/StateCheckService";
-import { securityService } from "./services/SecurityService";
+import { SecurityService } from "./services/SecurityService";
 import { packageService } from "./services/PackageService";
 import { SelfUpdateService } from "./services/SelfUpdateService";
 import { systemdService } from "./services/SystemdService";
@@ -27,12 +27,13 @@ import { hostname } from "os";
 import { error as logError } from "./utils/console";
 import config from "./config";
 
-const dockerService  = new DockerService(config.DOCKER_SOCKET);
-const buildService   = new BuildService(dockerService);
-const shellService   = new ShellService();
-const watcherService = new WatcherService(dockerService);
-const backupService  = new BackupService(dockerService);
-const deployService  = new DeployService(dockerService);
+const dockerService   = new DockerService(config.DOCKER_SOCKET);
+const securityService = new SecurityService(dockerService);
+const buildService    = new BuildService(dockerService);
+const shellService    = new ShellService();
+const watcherService  = new WatcherService(dockerService);
+const backupService   = new BackupService(dockerService);
+const deployService   = new DeployService(dockerService);
 
 const selfUpdateService = new SelfUpdateService(dockerService, hostname(), config.AGENT_VERSION);
 heartbeatService.setTargetVersionHandler(agent => selfUpdateService.onHeartbeatTarget(agent));
@@ -40,6 +41,10 @@ heartbeatService.setTargetVersionHandler(agent => selfUpdateService.onHeartbeatT
 watcherService.start();
 heartbeatService.start();
 stateCheckService.start();
+
+securityService.syncDockerUserChain().catch(err => {
+  logError("Security", "Docker user chain sync failed on startup", { error: (err as Error).message });
+});
 
 const containerHandlers  = createContainerHandlers(dockerService);
 const deploymentHandlers = createDeploymentHandlers(deployService);
