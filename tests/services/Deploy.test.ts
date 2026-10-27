@@ -327,6 +327,86 @@ describe("DeployService", () => {
     expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
   });
 
+  it("prestep: the one-off container is created on the first network and joins the rest before starting", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+    const stream = new PassThrough();
+    stream.end();
+    const oneShot = {
+      id: "prestep-container-000000000001",
+      attach: vi.fn().mockResolvedValue(stream),
+      start: vi.fn().mockResolvedValue(undefined),
+      wait: vi.fn().mockResolvedValue({ StatusCode: 0 }),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const prestepCreate = vi.fn().mockResolvedValue(oneShot);
+    const connections: Array<{ network: string; options: unknown }> = [];
+    const getNetwork = vi.fn().mockImplementation((network: string) => ({
+      connect: vi.fn().mockImplementation(async (options: unknown) => {
+        connections.push({ network, options });
+      }),
+    }));
+    const docker = makeDocker({ docker: { createContainer: prestepCreate, getNetwork } });
+
+    await new DeployService(docker as never).deploy(
+      baseOptions({
+        retire: [],
+        prestep: { run: true, command: ["php", "artisan", "migrate"] },
+        container: { name: "app-1", image: "app:1", networks: ["traefik", "app-net", "db-net"] },
+      }),
+    );
+
+    expect(prestepCreate).toHaveBeenCalledWith(expect.objectContaining({ HostConfig: expect.objectContaining({ NetworkMode: "traefik" }) }));
+    expect(getNetwork.mock.calls.map(call => call[0])).toEqual(["app-net", "db-net"]);
+    expect(connections).toEqual([
+      { network: "app-net", options: { Container: "prestep-container-000000000001" } },
+      { network: "db-net", options: { Container: "prestep-container-000000000001" } },
+    ]);
+    expect(getNetwork.mock.invocationCallOrder[1]).toBeLessThan(oneShot.start.mock.invocationCallOrder[0]);
+    expect(oneShot.remove).toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+  });
+
+  it("prestep: a failed network connect fails the step naming the network and removes the one-off container", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const stream = new PassThrough();
+    stream.end();
+    const oneShot = {
+      id: "prestep-container-000000000001",
+      attach: vi.fn().mockResolvedValue(stream),
+      start: vi.fn().mockResolvedValue(undefined),
+      wait: vi.fn().mockResolvedValue({ StatusCode: 0 }),
+      remove: vi.fn().mockResolvedValue(undefined),
+    };
+    const prestepCreate = vi.fn().mockResolvedValue(oneShot);
+    const getNetwork = vi.fn().mockImplementation((network: string) => ({
+      connect:
+        network === "db-net"
+          ? vi.fn().mockRejectedValue(new Error("network db-net not found"))
+          : vi.fn().mockResolvedValue(undefined),
+    }));
+    const docker = makeDocker({ docker: { createContainer: prestepCreate, getNetwork } });
+
+    await new DeployService(docker as never).deploy(
+      baseOptions({
+        retire: [],
+        prestep: { run: true, command: ["php", "artisan", "migrate"] },
+        container: { name: "app-1", image: "app:1", networks: ["traefik", "app-net", "db-net"] },
+      }),
+    );
+
+    expect(getNetwork.mock.calls.map(call => call[0])).toEqual(["app-net", "db-net"]);
+    expect(oneShot.remove).toHaveBeenCalled();
+    expect(docker.createContainer).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("db-net"),
+        retired: [],
+        discarded: [],
+      }),
+    );
+  });
+
   it("with no health check, accepts a container that stays running", async () => {
     vi.useFakeTimers();
     const docker = makeDocker();

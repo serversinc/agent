@@ -420,7 +420,8 @@ export class DeployService {
     const container = options.container;
     await this.ensureImage(container);
 
-    const primaryNetwork = (container.networks ?? []).find(net => !["host", "bridge", "none"].includes(net));
+    const networks = (container.networks ?? []).filter(net => !["host", "bridge", "none"].includes(net));
+    const [primaryNetwork, ...otherNetworks] = [...new Set(networks)];
 
     const oneShot = await this.docker.docker.createContainer({
       Image: container.image,
@@ -436,6 +437,17 @@ export class DeployService {
     });
 
     try {
+      // The one-off container is created on the first network only, so join the
+      // remaining ones before it starts: the pre-deploy command has to resolve
+      // every host the real container will reach.
+      for (const network of otherNetworks) {
+        try {
+          await this.docker.docker.getNetwork(network).connect({ Container: oneShot.id });
+        } catch (err) {
+          throw new Error(`Failed to connect pre-deploy container to network ${network}: ${(err as Error).message}`);
+        }
+      }
+
       const stream = await oneShot.attach({ stream: true, hijack: true, stdout: true, stderr: true });
       const chunks: Buffer[] = [];
       const drained = new Promise<void>(resolve => {
