@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { runHostProbe, type HostCommand, type HostCommandResult } from "./HostProbeCommand.js";
+export type { HostCommand, HostCommandResult } from "./HostProbeCommand.js";
 import type {
   CpuObservation,
   DiskMountObservation,
@@ -10,13 +10,8 @@ import type {
   ServerObservation,
 } from "../types/ServerObservation.js";
 
-const execFileAsync = promisify(execFile);
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-const MAX_BUFFER = 2 * 1024 * 1024;
-const TIMEOUT_MS = 4000;
 
-export interface HostCommandResult { stdout: string; stderr: string }
-export type HostCommand = (file: string, args: string[]) => Promise<HostCommandResult>;
 export interface HostTelemetryOptions {
   command?: HostCommand;
   now?: () => number;
@@ -27,14 +22,6 @@ export interface HostTelemetryOptions {
 interface CpuSnapshot { counters: bigint[]; cores: number }
 interface NetworkSnapshot { counters: Map<string, [bigint, bigint]> }
 
-function realCommand(file: string, args: string[]): Promise<HostCommandResult> {
-  return execFileAsync(file, args, {
-    encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: MAX_BUFFER,
-    env: { ...process.env, LC_ALL: "C", LANG: "C" },
-  }).then(({ stdout, stderr }) => ({ stdout, stderr }));
-}
 function validNumber(n: number): boolean { return Number.isFinite(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER; }
 function boundedNumber(n: bigint): number | null { return n >= 0n && n <= MAX_SAFE ? Number(n) : null; }
 function stamp(ms: number): string {
@@ -72,7 +59,7 @@ export class HostTelemetry {
   private readonly explicitInterfaces?: Set<string>;
 
   constructor(options: HostTelemetryOptions = {}) {
-    this.command = options.command ?? realCommand;
+    this.command = options.command ?? runHostProbe;
     this.now = options.now ?? Date.now;
     this.monotonicNow = options.monotonicNow ?? (() => Number(process.hrtime.bigint()) / 1e9);
     if (options.networkInterfaces) {
@@ -88,7 +75,9 @@ export class HostTelemetry {
   }
 
   private async host(file: string, args: string[] = []): Promise<HostCommandResult> {
-    return this.command("nsenter", ["--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "--root=/proc/1/root", "--wd=/", "--", file, ...args]);
+    // verifyHost requires us to already share PID 1's PID namespace. Avoid
+    // nsenter's otherwise unnecessary fork when entering that same namespace.
+    return this.command("nsenter", ["--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "--no-fork", "--root=/proc/1/root", "--wd=/", "--", file, ...args]);
   }
 
   private async collectOnce(): Promise<ServerObservation | null> {

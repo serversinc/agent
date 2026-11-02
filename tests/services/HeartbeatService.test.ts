@@ -106,7 +106,6 @@ describe("HeartbeatService", () => {
     ["duplicate", { metrics: { status: "duplicate", retryable: false } }],
     ["conflict", { metrics: { status: "conflict", retryable: false } }],
     ["invalid", { metrics: { status: "invalid", retryable: false } }],
-    ["failed but not retryable", { metrics: { status: "failed", retryable: false } }],
   ])("does not retry %s acknowledgement", async (_label, ack) => {
     postMock.mockResolvedValue(ack);
     const service = new HeartbeatService();
@@ -114,6 +113,10 @@ describe("HeartbeatService", () => {
     await flush();
     await Promise.resolve();
     expect(postMock).toHaveBeenCalledTimes(1);
+    expect(collectMock).toHaveBeenCalledTimes(1);
+    if (ack.metrics.status === "persisted" || ack.metrics.status === "duplicate") {
+      expect(warn).not.toHaveBeenCalled();
+    }
     service.stop();
   });
 
@@ -123,6 +126,40 @@ describe("HeartbeatService", () => {
     service.start();
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith("Heartbeat", `Heartbeat metrics rejected (${status})`));
     expect(postMock).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it.each([
+    ["failed", false, "Heartbeat metrics ingestion failed without retry"],
+    ["skipped", false, "Heartbeat metrics ingestion skipped for sent observation"],
+    ["skipped", true, "Heartbeat metrics ingestion skipped for sent observation"],
+  ])("warns for %s (retryable: %s) on a sent observation without retry", async (status, retryable, message) => {
+    const agent = { target_version: "2.0.0" };
+    postMock.mockResolvedValue({ metrics: { status, retryable, reason: "secret receiver details" }, agent });
+    const handler = vi.fn();
+    const service = new HeartbeatService();
+    service.setTargetVersionHandler(handler);
+    service.start();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith("Heartbeat", message));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledWith({ type: "alive", observation: OBSERVATION });
+    expect(collectMock).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(agent);
+    service.stop();
+  });
+
+  it("does not warn about skipped ingestion for bare liveness", async () => {
+    collectMock.mockResolvedValueOnce(null);
+    postMock.mockResolvedValue({ metrics: { status: "skipped", retryable: false, reason: "no observation" } });
+    const service = new HeartbeatService();
+    service.start();
+    await flush();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Heartbeat", "Host telemetry unavailable; sending liveness only");
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledWith({ type: "alive" });
+    expect(collectMock).toHaveBeenCalledTimes(1);
     service.stop();
   });
 

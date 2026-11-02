@@ -116,6 +116,10 @@ export class HeartbeatService {
         if (status === "failed" && response.metrics!.retryable === true && attempt === 1) continue;
         if (status === "failed" && response.metrics!.retryable === true) {
           warn(this.name, "Heartbeat metrics ingestion remains retryable after retry");
+        } else if (status === "failed") {
+          warn(this.name, "Heartbeat metrics ingestion failed without retry");
+        } else if (status === "skipped") {
+          warn(this.name, "Heartbeat metrics ingestion skipped for sent observation");
         }
         return;
       }

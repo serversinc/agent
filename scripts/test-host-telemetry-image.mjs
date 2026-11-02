@@ -16,17 +16,18 @@ function assert(condition, message) {
 function dockerRun(args) {
   return run(["run", "--rm", "--label", label, ...args, tag, "node", "-e", `
     const { HostTelemetry } = require('./dist/services/HostTelemetry.js');
-    const { execFile } = require('node:child_process');
-    const { promisify } = require('node:util');
-    const exec = promisify(execFile);
+    const telemetry = new HostTelemetry();
+    // Observe the actual default runner rather than replacing its timeout,
+    // locale, output bound, or process-group cleanup with a test substitute.
+    const runProbe = telemetry.command;
     const calls = [];
     const command = async (file, argv) => {
-      const result = await exec(file, argv, { encoding: 'utf8', timeout: 4000, maxBuffer: 2 * 1024 * 1024 });
+      const result = await runProbe(file, argv);
       calls.push({ file, args: argv, stdout: result.stdout });
       return { stdout: result.stdout, stderr: result.stderr };
     };
     (async () => {
-      const telemetry = new HostTelemetry({ command });
+      telemetry.command = command;
       const observations = [];
       for (let i = 0; i < 3; i++) observations.push(await telemetry.collect());
       const fs = require('fs');
@@ -35,6 +36,37 @@ function dockerRun(args) {
       process.stdout.write(JSON.stringify({ observations, calls, namespaces, hostNetns: hostNetns.stdout.trim(), containerNetDev: fs.readFileSync('/proc/net/dev','utf8'), pidNs: namespaces.pid.self, root: require('child_process').execFileSync('stat', ['-Lc', '%d:%i', '/proc/1/root'], {encoding:'utf8'}).trim() }));
     })().catch(e => { console.error(e); process.exit(2); });
   `]);
+}
+
+function timeoutCleanup() {
+  const result = JSON.parse(run(["run", "--rm", "--pid=host", "--privileged", "--label", label, tag, "node", "-e", `
+    const { HostTelemetry } = require('./dist/services/HostTelemetry.js');
+    const fs = require('node:fs');
+    (async () => {
+      // Runtime access to the private method exercises HostTelemetry's actual
+      // nsenter argv and default runner. No host files/config are modified.
+      // The fixture is independently finite even if timeout cleanup regresses.
+      const telemetry = new HostTelemetry();
+      const start = Date.now();
+      let failure;
+      try {
+        await telemetry.host('/bin/sh', ['-c', 'trap "" TERM; printf "%s\\\\n" "$$"; exec /bin/sleep 12']);
+      } catch (error) { failure = error; }
+      const elapsed_ms = Date.now() - start;
+      const pid = Number(failure?.stdout?.trim());
+      if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('timeout fixture did not report its PID');
+      const alive = () => {
+        try {
+          const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+          return !['Z', 'X'].includes(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0]);
+        } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      };
+      for (let i = 0; i < 100 && alive(); i++) await new Promise(resolve => setTimeout(resolve, 10));
+      if (failure?.code !== 'ETIMEDOUT' || alive() || elapsed_ms < 3500 || elapsed_ms > 6000) throw new Error('default host probe did not terminate within its deadline');
+      process.stdout.write(JSON.stringify({ result: 'pass', pid, elapsed_ms, code: failure.code, child_running: alive() }));
+    })().catch(error => { console.error(error); process.exitCode = 2; });
+  `]));
+  evidence.cases["default-runner-timeout-cleanup"] = result;
 }
 
 function expectedFailure(args, scenario) {
@@ -58,6 +90,7 @@ try {
   expectedFailure([], "isolated-pid-namespace");
   expectedFailure(["--privileged"], "privileged-isolated-pid-namespace");
   expectedFailure(["--pid=host"], "host-pid-without-privileges");
+  timeoutCleanup();
 
   const result = JSON.parse(dockerRun(["--pid=host", "--privileged"]));
   const observations = result.observations;
