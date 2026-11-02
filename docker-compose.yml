@@ -2,6 +2,8 @@ services:
   agent:
     container_name: agent
     build: .
+    pid: host
+    privileged: true
     env_file:
      - .env
     ports:

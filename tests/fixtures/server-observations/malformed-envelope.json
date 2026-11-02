@@ -1,0 +1,12 @@
+{
+  "body": {
+    "observation": {
+      "schema_version": "1",
+      "sample_id": "not-a-uuid",
+      "boot_id": "22222222-2222-4222-8222-222222222222",
+      "observed_at": "tomorrow",
+      "collectors": {}
+    }
+  },
+  "expected": {"reject": true}
+}
