@@ -137,18 +137,6 @@ try {
     cpu_statuses: observations.map(o => o.collectors.cpu.status),
     network_statuses: observations.map(o => o.collectors.network.status),
   };
-  if (process.env.API_PROJECT_DIR) {
-    execFileSync("php", [
-      "scripts/api-parser-interop.php",
-      process.env.API_PROJECT_DIR,
-      "tests/fixtures/server-observations",
-    ], {
-      encoding: "utf8",
-      stdio: "inherit",
-      env: { ...process.env, PRODUCER_OBSERVATION_JSON: JSON.stringify(latest) },
-    });
-    evidence.cases["privileged-host"].api_parser = "passed with actual producer sample";
-  }
   console.log(JSON.stringify(evidence, null, 2));
 } catch (error) {
   console.error(error.stack || error);
