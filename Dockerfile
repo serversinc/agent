@@ -27,7 +27,6 @@ RUN apk add --no-cache \
     curl \
     git \
     iproute2 \
-    util-linux \
     tini
 
 # Copy package files and install ONLY production dependencies
