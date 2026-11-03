@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "A node.js agent for managing remote Docker containers.",
   "main": "index.js",
   "scripts": {
@@ -11,8 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage",
-    "test:integration:host": "node scripts/test-host-telemetry-image.mjs"
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",

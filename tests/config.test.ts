@@ -17,7 +17,6 @@ describe("config — heartbeat interval", () => {
     process.env.SERVER_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     process.env.PUBLIC_KEY_PATH = keyPath;
     delete process.env.HEARTBEAT_INTERVAL_MS;
-    delete process.env.METRICS_NETWORK_INTERFACES;
 
     vi.resetModules();
   });
@@ -47,22 +46,4 @@ describe("config — heartbeat interval", () => {
 
     await expect(import("../src/config")).rejects.toThrow(/Configuration validation failed/);
   });
-
-  it("defaults network selection to host default routes and parses a configured allowlist", async () => {
-    const { default: defaults } = await import("../src/config");
-    expect(defaults.METRICS_NETWORK_INTERFACES).toEqual([]);
-
-    vi.resetModules();
-    process.env.METRICS_NETWORK_INTERFACES = "eth0, br0";
-    const { default: configured } = await import("../src/config");
-    expect(configured.METRICS_NETWORK_INTERFACES).toEqual(["eth0", "br0"]);
-  });
-
-  it.each(["lo", "eth0,eth0", "eth-interface-name-too-long", "eth0,,br0"]) (
-    "rejects invalid network interface selection %s",
-    async selection => {
-      process.env.METRICS_NETWORK_INTERFACES = selection;
-      await expect(import("../src/config")).rejects.toThrow(/Configuration validation failed/);
-    },
-  );
 });
