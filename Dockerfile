@@ -1,5 +1,5 @@
 # ---- Builder Stage ----
-FROM node:24-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app
 
 # Copy package files first for better caching
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # ---- Production Stage ----
-FROM node:24-alpine
+FROM node:25-alpine
 WORKDIR /app
 
 # Stamped by CI from package.json version (see docker-publish.yml) so a
