@@ -1,0 +1,26 @@
+{
+  "body": {
+    "observation": {
+      "schema_version": 1,
+      "sample_id": "11111111-1111-4111-8111-111111111114",
+      "boot_id": "22222222-2222-4222-8222-222222222222",
+      "observed_at": "2026-10-29T12:30:45Z",
+      "collectors": {
+        "cpu": {"status": "success", "observed_at": "2026-10-29T12:30:45Z", "utilisation_pct": 101},
+        "memory": {"status": "success", "observed_at": "2026-10-29T12:30:45Z", "used_bytes": 20, "total_bytes": 10},
+        "network": {"status": "success", "observed_at": "2026-10-29T12:30:45Z", "rx_bytes_delta": 1, "tx_bytes_delta": 1, "measured_duration_seconds": 0},
+        "disk": {
+          "status": "success",
+          "observed_at": "2026-10-29T12:30:45Z",
+          "mounts": [{"mount": "/", "size_bytes": 10, "used_bytes": 8, "available_bytes": 11}]
+        }
+      }
+    }
+  },
+  "expected": {
+    "cpu_status": "invalid",
+    "memory_status": "invalid",
+    "network_status": "invalid",
+    "disk_status": "invalid"
+  }
+}

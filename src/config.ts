@@ -54,6 +54,14 @@ const configSchema = z.object({
   REPOS_DIR: z.string().default("repos"),
 
   AGENT_VERSION: z.string().default("dev"),
+
+  METRICS_NETWORK_INTERFACES: z
+    .string()
+    .default("")
+    .transform(value => value.trim() === "" ? [] : value.split(",").map(name => name.trim()))
+    .pipe(z.array(z.string().min(1).max(15).regex(/^[A-Za-z0-9_.:-]+$/)).max(128)
+      .refine(names => !names.includes("lo"), "loopback must not be selected")
+      .refine(names => new Set(names).size === names.length, "interface names must be unique")),
 });
 
 // Infer the TypeScript type from the schema
@@ -76,6 +84,7 @@ function loadConfig(): AppConfig {
       STATE_CHECK_INTERVAL_MS: process.env.STATE_CHECK_INTERVAL_MS,
       REPOS_DIR: process.env.REPOS_DIR,
       AGENT_VERSION: process.env.AGENT_VERSION,
+      METRICS_NETWORK_INTERFACES: process.env.METRICS_NETWORK_INTERFACES,
     });
 
     // Load the public key file
