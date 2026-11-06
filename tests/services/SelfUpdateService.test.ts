@@ -4,7 +4,7 @@ import { SelfUpdateService } from "../../src/services/SelfUpdateService";
 
 vi.mock("../../src/utils/console", () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), success: vi.fn(), _setLogger: vi.fn() }));
 
-vi.mock("../../src/config", () => ({ default: { PORT: 7567 } }));
+vi.mock("../../src/config", () => ({ default: { PORT: 7567, METRICS_NETWORK_INTERFACES: [] } }));
 
 const { postSafeMock } = vi.hoisted(() => ({ postSafeMock: vi.fn().mockResolvedValue(true) }));
 vi.mock("../../src/services/Http", () => ({ httpService: { postSafe: postSafeMock } }));
