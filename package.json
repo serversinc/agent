@@ -32,7 +32,7 @@
     "@types/node": "^26.6.4",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^5.0.3",
-    "@vitest/ui": "^5.0.3",
+    "@vitest/ui": "^5.1.0",
     "nodemon": "^3.1.9",
     "supertest": "^7.3.1",
     "ts-node": "^10.9.2",
